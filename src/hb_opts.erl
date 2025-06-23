@@ -181,7 +181,9 @@ default_message() ->
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
             #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois},
-            #{<<"name">> => <<"wao@1.0">>, <<"module">> => dev_wao}
+            #{<<"name">> => <<"wao@1.0">>, <<"module">> => dev_wao},
+            #{<<"name">> => <<"add@1.0">>, <<"module">> => dev_add},
+            #{<<"name">> => <<"mul@1.0">>, <<"module">> => dev_mul}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
