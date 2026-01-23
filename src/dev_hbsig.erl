@@ -193,25 +193,33 @@ is_safe_ascii(Bin) ->
 
 structured_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_structured:from(Data),
+    %% Use dev_codec_structured with linkify_mode => false to disable linkification
+    NoLinkOpts = Opts#{ linkify_mode => false },
+    {ok, OBJ} = dev_codec_structured:from(Data, #{}, NoLinkOpts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 structured_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_structured:to(Data),
+    %% Use dev_codec_structured with linkify_mode => false to disable linkification
+    NoLinkOpts = Opts#{ linkify_mode => false },
+    {ok, OBJ} = dev_codec_structured:to(Data, #{}, NoLinkOpts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 httpsig_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_httpsig:from(Data),
+    %% Use linkify_mode => false to disable linkification
+    NoLinkOpts = Opts#{ linkify_mode => false },
+    {ok, OBJ} = dev_codec_httpsig:from(Data, #{}, NoLinkOpts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 httpsig_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_httpsig:to(Data),
+    %% Use linkify_mode => false to disable linkification
+    NoLinkOpts = Opts#{ linkify_mode => false },
+    {ok, OBJ} = dev_codec_httpsig:to(Data, #{}, NoLinkOpts),
     Result = to_str(OBJ),
     {ok, Result}.
 
@@ -296,3 +304,47 @@ path_to_binary([Part | Rest]) ->
 msg2(_Msg1, Msg2, _Opts) ->
     Result = to_str(Msg2),
     {ok, Result}.
+
+%% Custom structured_from implementation (no linkification)
+%% Just normalizes keys to lowercase and recursively processes
+hbsig_structured_from(Bin) when is_binary(Bin) -> Bin;
+hbsig_structured_from(List) when is_list(List) ->
+    [hbsig_structured_from(Item) || Item <- List];
+hbsig_structured_from(Map) when is_map(Map) ->
+    maps:fold(
+        fun(Key, Value, Acc) ->
+            NormKey = normalize_key(Key),
+            NormValue = hbsig_structured_from(Value),
+            maps:put(NormKey, NormValue, Acc)
+        end,
+        #{},
+        Map
+    );
+hbsig_structured_from(Other) -> Other.
+
+%% Custom structured_to implementation (no linkification)
+%% Just passes through the data - decoding is handled by to_str
+hbsig_structured_to(Bin) when is_binary(Bin) -> Bin;
+hbsig_structured_to(List) when is_list(List) ->
+    [hbsig_structured_to(Item) || Item <- List];
+hbsig_structured_to(Map) when is_map(Map) ->
+    maps:fold(
+        fun(Key, Value, Acc) ->
+            NormKey = normalize_key(Key),
+            NormValue = hbsig_structured_to(Value),
+            maps:put(NormKey, NormValue, Acc)
+        end,
+        #{},
+        Map
+    );
+hbsig_structured_to(Other) -> Other.
+
+%% Normalize key to lowercase binary
+normalize_key(Key) when is_binary(Key) ->
+    string:lowercase(Key);
+normalize_key(Key) when is_atom(Key) ->
+    string:lowercase(atom_to_binary(Key, utf8));
+normalize_key(Key) when is_list(Key) ->
+    string:lowercase(list_to_binary(Key));
+normalize_key(Key) ->
+    Key.
