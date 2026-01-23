@@ -217,13 +217,13 @@ httpsig_to(_Msg1, Msg2, Opts) ->
 
 flat_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_flat:from(Data),
+    {ok, OBJ} = dev_codec_flat:from(Data, #{}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 flat_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_flat:to(Data),
+    {ok, OBJ} = dev_codec_flat:to(Data, #{}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
