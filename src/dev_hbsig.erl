@@ -1,10 +1,10 @@
 -module(dev_hbsig).
--export([ json_to_erl/3, to_erl/1, to_str/1, structured_to/3, structured_from/3, httpsig_from/3, httpsig_to/3, msg2/3, flat_from/3, flat_to/3 ]).
+-export([ json_to_erl/3, to_erl/2, to_str/1, structured_to/3, structured_from/3, httpsig_from/3, httpsig_to/3, msg2/3, flat_from/3, flat_to/3 ]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
-to_erl(Msg) ->
-    JSON = maps:get(<<"body">>, Msg),
+to_erl(Msg, Opts) ->
+    JSON = hb_ao:get(<<"body">>, Msg, Opts),
     Data = dev_codec_json:from(JSON),
     process_json_data(Data).
     
@@ -79,8 +79,8 @@ escape_binary_string(<<C, Rest/binary>>, Acc) ->
     Escaped = io_lib:format("\\~3.8.0B", [C]),
     escape_binary_string(Rest, lists:reverse(Escaped) ++ Acc).
 
-json_to_erl(Msg1, _Msg2, _Opts) ->
-    Data = to_erl(Msg1),
+json_to_erl(Msg1, _Msg2, Opts) ->
+    Data = to_erl(Msg1, Opts),
     io:format("After structured field decode: ~p~n", [Data]),
     
     % Use to_str to get both representations
@@ -196,48 +196,48 @@ is_safe_ascii(Bin) ->
     lists:all(fun(B) -> B >= 32 andalso B =< 126 end, binary_to_list(Bin)).
 
 
-structured_from(Msg1, _Msg2, _Opts) ->
-    Data = to_erl(Msg1),
+structured_from(Msg1, _Msg2, Opts) ->
+    Data = to_erl(Msg1, Opts),
     io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_structured:from(Data),
     io:format("OBJ: ~p~n", [OBJ]),    
     Result = to_str(OBJ),
     {ok, Result}.
 
-structured_to(Msg1, _Msg2, _Opts) ->
-    Data = to_erl(Msg1),
+structured_to(Msg1, _Msg2, Opts) ->
+    Data = to_erl(Msg1, Opts),
     io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_structured:to(Data),
     io:format("OBJ: ~p~n", [OBJ]),    
     Result = to_str(OBJ),
     {ok, Result}.
 
-httpsig_from(Msg1, Msg2, Opts) ->
-    Data = to_erl(Msg1),
+httpsig_from(Msg1, _Msg2, Opts) ->
+    Data = to_erl(Msg1, Opts),
     io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_httpsig:from(Data),
     io:format("httpsig:to: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
-httpsig_to(Msg1, Msg2, Opts) ->
-    Data = to_erl(Msg1),
+httpsig_to(Msg1, _Msg2, Opts) ->
+    Data = to_erl(Msg1, Opts),
     io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_httpsig:to(Data),
     io:format("httpsig:to: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
-flat_from(Msg1, _Msg2, _Opts) ->
-    Data = to_erl(Msg1),
+flat_from(Msg1, _Msg2, Opts) ->
+    Data = to_erl(Msg1, Opts),
     io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_flat:from(Data),
     io:format("OBJ: ~p~n", [OBJ]),    
     Result = to_str(OBJ),
     {ok, Result}.
 
-flat_to(Msg1, _Msg2, _Opts) ->
-    Data = to_erl(Msg1),
+flat_to(Msg1, _Msg2, Opts) ->
+    Data = to_erl(Msg1, Opts),
     io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_flat:to(Data),
     io:format("OBJ: ~p~n", [OBJ]),    
