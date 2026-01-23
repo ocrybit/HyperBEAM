@@ -217,15 +217,81 @@ httpsig_to(_Msg1, Msg2, Opts) ->
 
 flat_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    {ok, OBJ} = dev_codec_flat:from(Data, #{}, Opts),
+    OBJ = hbsig_flat_from(Data),
     Result = to_str(OBJ),
     {ok, Result}.
 
 flat_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    {ok, OBJ} = dev_codec_flat:to(Data, #{}, Opts),
+    OBJ = hbsig_flat_to(Data),
     Result = to_str(OBJ),
     {ok, Result}.
+
+%% Custom flat_from implementation that handles all data types
+%% Converts flat paths like <<"a/b/c">> to nested maps
+hbsig_flat_from(Bin) when is_binary(Bin) -> Bin;
+hbsig_flat_from(Map) when is_map(Map) ->
+    maps:fold(
+        fun(Path, Value, Acc) ->
+            PathParts = path_to_parts(Path),
+            inject_at_path(PathParts, Value, Acc)
+        end,
+        #{},
+        Map
+    );
+hbsig_flat_from(Other) -> Other.
+
+%% Custom flat_to implementation that handles all data types
+%% Converts nested maps to flat paths
+hbsig_flat_to(Bin) when is_binary(Bin) -> Bin;
+hbsig_flat_to(Map) when is_map(Map) ->
+    flatten_recursive(Map, [], #{});
+hbsig_flat_to(Other) -> Other.
+
+%% Helper: convert path string to parts
+path_to_parts(Path) when is_binary(Path) ->
+    binary:split(Path, <<"/">>, [global]);
+path_to_parts(Path) when is_list(Path) ->
+    Path.
+
+%% Helper: inject value at path in nested map
+inject_at_path([Key], Value, Map) ->
+    case maps:get(Key, Map, undefined) of
+        undefined ->
+            maps:put(Key, Value, Map);
+        Existing when is_map(Existing), is_map(Value) ->
+            maps:put(Key, maps:merge(Existing, Value), Map);
+        _ ->
+            maps:put(Key, Value, Map)
+    end;
+inject_at_path([Key | Rest], Value, Map) ->
+    SubMap = maps:get(Key, Map, #{}),
+    NewSubMap = case is_map(SubMap) of
+        true -> inject_at_path(Rest, Value, SubMap);
+        false -> inject_at_path(Rest, Value, #{})
+    end,
+    maps:put(Key, NewSubMap, Map).
+
+%% Helper: recursively flatten a map
+flatten_recursive(Map, CurrentPath, Result) when is_map(Map) ->
+    maps:fold(
+        fun(Key, Value, Acc) ->
+            NewPath = CurrentPath ++ [Key],
+            flatten_recursive(Value, NewPath, Acc)
+        end,
+        Result,
+        Map
+    );
+flatten_recursive(Value, CurrentPath, Result) ->
+    PathKey = path_to_binary(CurrentPath),
+    maps:put(PathKey, Value, Result).
+
+%% Helper: convert path parts to binary path
+path_to_binary([]) -> <<>>;
+path_to_binary([Part]) when is_binary(Part) -> Part;
+path_to_binary([Part | Rest]) ->
+    RestBin = path_to_binary(Rest),
+    <<Part/binary, "/", RestBin/binary>>.
 
 msg2(_Msg1, Msg2, _Opts) ->
     Result = to_str(Msg2),
