@@ -4,7 +4,7 @@
 -include("include/hb.hrl").
 
 to_erl(Msg, Opts) ->
-    JSON = hb_ao:get(<<"body">>, Msg, Opts),
+    JSON = hb_ao:get(<<"body">>, Msg, Opts#{ hashpath => ignore }),
     Data = dev_codec_json:from(JSON),
     process_json_data(Data).
     
