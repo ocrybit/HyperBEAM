@@ -4,9 +4,20 @@
 -include("include/hb.hrl").
 
 to_erl(Msg, Opts) ->
-    JSON = hb_ao:get(<<"body">>, Msg, Opts#{ hashpath => ignore }),
-    Data = dev_codec_json:from(JSON),
-    process_json_data(Data).
+    %% Get body from message - try direct access first, then hb_ao:get
+    JSON = case maps:get(<<"body">>, Msg, not_found) of
+        not_found ->
+            hb_ao:get(<<"body">>, Msg, Opts#{ hashpath => ignore });
+        Body -> Body
+    end,
+    case JSON of
+        not_found ->
+            throw({error, body_not_found});
+        _ ->
+            %% Parse JSON using json:decode (OTP 27 returns value directly)
+            Data = json:decode(JSON),
+            process_json_data(Data)
+    end.
     
 %% Return both raw term and formatted string representation
 to_str(Obj) -> 
@@ -80,25 +91,9 @@ escape_binary_string(<<C, Rest/binary>>, Acc) ->
     escape_binary_string(Rest, lists:reverse(Escaped) ++ Acc).
 
 json_to_erl(_Msg1, Msg2, Opts) ->
+    %% The body is in Msg2 (request message) after normalize_unsigned restores it
     Data = to_erl(Msg2, Opts),
-    io:format("After structured field decode: ~p~n", [Data]),
-    
-    % Use to_str to get both representations
     Result = to_str(Data),
-    
-    % Log the formatted part for debugging
-    case binary:match(Result, <<"formatted=">>) of
-        {Start, _} ->
-            <<_:Start/binary, "formatted=", Rest/binary>> = Result,
-            case binary:match(Rest, <<"}">>)  of
-                {End, _} ->
-                    <<Formatted:End/binary, _/binary>> = Rest,
-                    io:format("Erlang string response: ~s~n", [Formatted]);
-                _ -> ok
-            end;
-        _ -> ok
-    end,
-    
     {ok, Result}.
 
 %% Format term with UTF-8 safe binary representation
@@ -198,53 +193,40 @@ is_safe_ascii(Bin) ->
 
 structured_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_structured:from(Data),
-    io:format("OBJ: ~p~n", [OBJ]),    
     Result = to_str(OBJ),
     {ok, Result}.
 
 structured_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_structured:to(Data),
-    io:format("OBJ: ~p~n", [OBJ]),    
     Result = to_str(OBJ),
     {ok, Result}.
 
 httpsig_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_httpsig:from(Data),
-    io:format("httpsig:to: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
 httpsig_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_httpsig:to(Data),
-    io:format("httpsig:to: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
 flat_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_flat:from(Data),
-    io:format("OBJ: ~p~n", [OBJ]),    
     Result = to_str(OBJ),
     {ok, Result}.
 
 flat_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    io:format("After structured field decode: ~p~n", [Data]),
     OBJ = dev_codec_flat:to(Data),
-    io:format("OBJ: ~p~n", [OBJ]),    
     Result = to_str(OBJ),
     {ok, Result}.
 
-msg2(Msg, Msg2, Opts) -> 
-    io:format("OBJ: ~p~n", [Msg2]),    
+msg2(_Msg1, Msg2, _Opts) ->
     Result = to_str(Msg2),
     {ok, Result}.

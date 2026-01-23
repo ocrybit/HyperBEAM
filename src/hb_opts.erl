@@ -146,6 +146,7 @@ default_message() ->
             #{<<"name">> => <<"httpsig@1.0">>, <<"module">> => dev_codec_httpsig},
             #{<<"name">> => <<"http-auth@1.0">>, <<"module">> => dev_codec_http_auth},
             #{<<"name">> => <<"hook@1.0">>, <<"module">> => dev_hook},
+            #{<<"name">> => <<"hbsig@1.0">>, <<"module">> => dev_hbsig},
             #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
             #{<<"name">> => <<"copycat@1.0">>, <<"module">> => dev_copycat},
             #{<<"name">> => <<"json@1.0">>, <<"module">> => dev_codec_json},
@@ -178,18 +179,11 @@ default_message() ->
             #{<<"name">> => <<"trie@1.0">>, <<"module">> => dev_trie},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
             #{<<"name">> => <<"secret@1.0">>, <<"module">> => dev_secret},
+            #{<<"name">> => <<"wao@1.0">>, <<"module">> => dev_wao},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
             #{<<"name">> => <<"whois@1.0">>, <<"module">> => dev_whois},
-            #{<<"name">> => <<"wao@1.0">>, <<"module">> => dev_wao},
-            #{<<"name">> => <<"double@1.0">>, <<"module">> => dev_double},
-            #{<<"name">> => <<"add@1.0">>, <<"module">> => dev_add},
-            #{<<"name">> => <<"mul@1.0">>, <<"module">> => dev_mul},
-            #{<<"name">> => <<"inc@1.0">>, <<"module">> => dev_inc},
-            #{<<"name">> => <<"inc2@1.0">>, <<"module">> => dev_inc2},
-            #{<<"name">> => <<"square@1.0">>, <<"module">> => dev_square},
-            #{<<"name">> => <<"mydev@1.0">>, <<"module">> => dev_mydev},
-            #{<<"name">> => <<"hbsig@1.0">>, <<"module">> => dev_hbsig}
+            #{<<"name">> => <<"dex@1.0">>, <<"module">> => dev_dex}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -853,11 +847,11 @@ as_identity_test() ->
         {ok, #{ priv_wallet := TestWallet2, test_key := 2 }},
         as(TestID2, Opts)
     ).
-
+    
 ensure_node_history_test() ->
     % Define some test data
     RequiredOpts = #{
-        key1 =>
+        key1 => 
             #{
                 <<"type">> => <<"string">>,
                 <<"value">> => <<"value1">>
@@ -867,29 +861,29 @@ ensure_node_history_test() ->
     % Test case: All items have required options
     ValidOpts =
     #{
-        <<"key1">> =>
+        <<"key1">> => 
             #{
                 <<"type">> => <<"string">>,
                 <<"value">> => <<"value1">>
-            },
-        <<"key2">> => <<"value2">>,
+            }, 
+        <<"key2">> => <<"value2">>, 
         <<"extra">> => <<"value">>,
         node_history => [
             #{
-                <<"key1">> =>
+                <<"key1">> => 
                     #{
                         <<"type">> => <<"string">>,
                         <<"value">> => <<"value1">>
-                    },
-                <<"key2">> => <<"value2">>,
+                    }, 
+                <<"key2">> => <<"value2">>, 
                 <<"extra">> => <<"value">>
             },
             #{
-                <<"key1">> =>
+                <<"key1">> => 
                     #{
                         <<"type">> => <<"string">>,
                         <<"value">> => <<"value1">>
-                    },
+                    }, 
                 <<"key2">> => <<"value2">>
             }
         ]
@@ -897,16 +891,16 @@ ensure_node_history_test() ->
     ?assertEqual({ok, valid}, ensure_node_history(ValidOpts, RequiredOpts)),
     ?event({valid_items, ValidOpts}),
     % Test Missing items
-    MissingItems =
+    MissingItems = 
     #{
-        <<"key1">> =>
+        <<"key1">> => 
             #{
                 <<"type">> => <<"string">>,
                 <<"value">> => <<"value1">>
-            },
+            }, 
         node_history => [
             #{
-                <<"key1">> =>
+                <<"key1">> => 
                     #{
                         <<"type">> => <<"string">>,
                         <<"value">> => <<"value1">>
@@ -921,16 +915,16 @@ ensure_node_history_test() ->
     % Test Invalid items
     InvalidItems =
         #{
-            <<"key1">> =>
+            <<"key1">> => 
                 #{
                     <<"type">> => <<"string">>,
                     <<"value">> => <<"value">>
-                },
+                }, 
             <<"key2">> => <<"value2">>,
             node_history =>
                 [
                     #{
-                        <<"key1">> =>
+                        <<"key1">> => 
                             #{
                                 <<"type">> => <<"string">>,
                                 <<"value">> => <<"value2">>
