@@ -927,7 +927,7 @@ httpsig_to_tabm_singleton(PrimMsg, Req, Body, Opts) ->
                 false ->
                     do_nothing
             end,
-            normalize_unsigned(PrimMsg, Req, Decoded, Opts);
+            normalize_unsigned(PrimMsg, Req, Decoded, Opts#{ http_body => Body });
         false ->
             ?event(http_verify,
                 {invalid_signature,
@@ -1010,9 +1010,19 @@ normalize_unsigned(PrimMsg, Req = #{ headers := RawHeaders }, Msg, Opts) ->
                 )
         end,
     % If the body is empty and unsigned, we remove it.
+    % If the body was stripped by with_only_committed but was in the original
+    % HTTP request, add it back (for devices that need to process unsigned body data).
     NormalBody =
         case hb_maps:get(<<"body">>, WithCookie, undefined, Opts) of
             <<"">> -> hb_message:without_unless_signed(<<"body">>, WithCookie, Opts);
+            undefined ->
+                % Body was stripped, try to restore from http_body in Opts
+                case hb_opts:get(http_body, undefined, Opts) of
+                    undefined -> WithCookie;
+                    HttpBody when is_binary(HttpBody), HttpBody =/= <<"">> ->
+                        WithCookie#{ <<"body">> => HttpBody };
+                    _ -> WithCookie
+                end;
             _ -> WithCookie
         end,
     case hb_maps:get(<<"ao-peer-port">>, NormalBody, undefined, Opts) of
