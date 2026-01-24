@@ -16,9 +16,32 @@ Since the v0.9-milestone-3-beta-3 release on October 2, 2025, HyperBEAM has unde
 - **~117 PRs** created (PR #502 → #619)
 - **198 total branches** with 73 feature/fix/improvement branches
 - **7 open issues** tracking critical improvements
-- **22 open PRs** with features awaiting merge
+- **57 open PRs** with features awaiting merge
 
-The development trajectory points toward a **major AO 1.5 release** with fundamental protocol improvements.
+The development trajectory points toward **Milestone 4 (M4)** with fundamental protocol improvements.
+
+---
+
+## 🚀 OFFICIAL M4 ROADMAP (Announced Jan 22, 2026)
+
+**Source**: [@aoTheComputer official announcement](https://twitter.com/aoTheComputer) - January 22, 2026
+
+### Completed Milestones:
+| Milestone | Name | Status |
+|-----------|------|--------|
+| ✅ M1 | AO Core | **Complete** |
+| ✅ M2 | Native Execution & TEE Support | **Complete** |
+| ✅ M3 | LegacyNet Migration (100x performance gains) | **Complete** |
+
+### What's Next for M4:
+| Feature | Description | Related Branches/PRs |
+|---------|-------------|---------------------|
+| **Decentralized Schedulers** | Distributed scheduling infrastructure | feat/native-tokens, impr/scheduler-assignments |
+| **LiveNet Staking Marketplace** | Token staking and marketplace | feat/mint-indexes, feat/native-tokens |
+| **Streaming Token Distributions** | Real-time token distribution system | feat/mint-indexes, ~security@1.0 |
+
+> *"The mainnet migration is complete. Now comes the real unlock 🔓"*
+> — @aoTheComputer, January 22, 2026
 
 ---
 
@@ -36,20 +59,146 @@ The development trajectory points toward a **major AO 1.5 release** with fundame
 | Deploy Branches | 5 | deploy/edge_626, deploy/non-vol |
 | Developer Branches | 15+ | NickJ202/*, VinceJuliano/*, speeddragon/* |
 
-### 1.2 Active Development Branches (Jan 2026)
+### 1.2 Active Development Branches with Ownership (Jan 2026)
 
-| Branch | Last Updated | Unique Commits | Focus |
-|--------|--------------|----------------|-------|
-| expr/micro-cache | Jan 23, 2026 | 50+ | Micro-cache implementation |
-| expr/micro-ao | Jan 23, 2026 | 45+ | Lightweight AO-Core resolver |
-| feat/arweave-id-offset-indexing | Jan 23, 2026 | 30+ | TX/DataItem indexing |
-| impr/secure-actions | Jan 22, 2026 | 40+ | Security invariant testing |
-| expr/1.5 | Jan 20, 2026 | 60+ | AO 1.5 type system |
-| feat/preloaded-store | Jan 20, 2026 | 15+ | Device function store |
-| feat/native-tokens | Dec 17, 2025 | 45+ | Token economy |
-| feat/mint-indexes | Dec 18, 2025 | 50+ | Mint subscription system |
-| feat/ecdsa_support | Dec 18, 2025 | 35+ | ECDSA signatures |
-| feat/c_snp | Dec 18, 2025 | 35+ | AMD SEV-SNP attestation |
+| Branch | Owner | Last Updated | Commits | PR Status | Focus |
+|--------|-------|--------------|---------|-----------|-------|
+| expr/micro-cache | samcamwilliams | Jan 23, 2026 | 50+ | No PR | Micro-cache implementation |
+| expr/micro-ao | samcamwilliams | Jan 23, 2026 | 45+ | No PR | Lightweight AO-Core resolver |
+| feat/arweave-id-offset-indexing | JamesPiechota | Jan 23, 2026 | 30+ | **#616 Draft** | TX/DataItem indexing |
+| use_store_routes | speeddragon | Jan 23, 2026 | 5+ | **#563 Open** | Store routing |
+| impr/secure-actions | noahlevenson | Jan 22, 2026 | 40+ | No PR | Security invariant testing |
+| expr/1.5 | samcamwilliams | Jan 20, 2026 | 60+ | **#618 Merged** | AO 1.5 type system |
+| feat/preloaded-store | samcamwilliams | Jan 20, 2026 | 15+ | No PR | Device function store |
+| fix/paranoid | speeddragon | Jan 16, 2026 | 5+ | **#613 Open** | Paranoid mode fixes |
+| fix/path-id | JamesPiechota | Jan 16, 2026 | 5+ | **#612 Open** | Path segment handling |
+| fix/multiple_reloaded_msg | speeddragon | Jan 16, 2026 | 3+ | **#611 Open** | Cache message fix |
+| feat/native-tokens | samcamwilliams | Dec 17, 2025 | 45+ | No PR | Token economy |
+| feat/mint-indexes | samcamwilliams | Dec 18, 2025 | 50+ | No PR | Mint subscription system |
+| feat/ecdsa_support | speeddragon | Dec 18, 2025 | 35+ | **#574 Open** | ECDSA signatures |
+| feat/c_snp | PeterFarber | Dec 18, 2025 | 35+ | No PR | AMD SEV-SNP attestation |
+
+### 1.3 Complete Branch-to-PR Mapping
+
+#### Open PRs (57 total)
+
+| PR # | Branch | Author | Title | Status | Created |
+|------|--------|--------|-------|--------|---------|
+| #619 | - | Jonny-Ringo | Update link in base.html | Open | Jan 21, 2026 |
+| #616 | feat/arweave-id-offset-indexing | JamesPiechota | Arweave ID offset indexing | **Draft** | Jan 19, 2026 |
+| #614 | - | droter | content-digest preservation in JSON | Open | Jan 19, 2026 |
+| #613 | fix/paranoid | speeddragon | Paranoid TX fetch fix | Open | Jan 16, 2026 |
+| #612 | fix/path-id | JamesPiechota | Path segment ID handling | Open | Jan 16, 2026 |
+| #611 | fix/multiple_reloaded_msg | speeddragon | Multiple cache loading fix | Open | Jan 13, 2026 |
+| #603 | - | speeddragon | ans104_wasm_test fix | Open | Dec 31, 2025 |
+| #602 | fix/parallel_requests | speeddragon | Parallel requests fix | Open | Dec 31, 2025 |
+| #601 | - | speeddragon | Optional unbundle bundles | Open | Dec 23, 2025 |
+| #598 | - | speeddragon | Invalid message handling | Open | Dec 19, 2025 |
+| #596 | - | speeddragon | httpsig siginfo format | Open | Dec 17, 2025 |
+| #592 | - | rythmn1111 | rustup for faster builds | Open | Dec 16, 2025 |
+| #580 | - | jax-cn | Inference Device + SEV GPU | Open | Dec 8, 2025 |
+| #574 | feat/ecdsa_support | speeddragon | Ed25519 support | Open | Nov 27, 2025 |
+| #568 | - | JamesPiechota | Unsigned ans104 commitments | **Draft** | Nov 25, 2025 |
+| #563 | use_store_routes | speeddragon | Load routes via store | Open | Nov 20, 2025 |
+| #556 | - | PeterFarber | HTTP relay hardening | Open | Nov 17, 2025 |
+| #552 | - | speeddragon | Multiple store read fix | Open | Nov 11, 2025 |
+| #548 | - | jfrain99 | hb_ao:get_many optimization | Open | Nov 5, 2025 |
+| #545 | - | speeddragon | erlang_ls.config formatting | Open | Nov 3, 2025 |
+| #533 | - | speeddragon | Config documentation | Open | Oct 24, 2025 |
+| #520 | - | speeddragon | S3 Store support | Open | Oct 16, 2025 |
+| #500 | - | jfrain99 | rsa_pss optimization | **WIP** | Oct 2, 2025 |
+| #484 | - | nikooo777 | HTTP Range requests | **Draft** | Sep 20, 2025 |
+| #481 | - | PeterFarber | SSL Certificate Device | Open | Sep 18, 2025 |
+| #479 | - | samuelmanzanera | Multi-commitment signatures | Open | Sep 12, 2025 |
+| #477 | - | noahlevenson | HTTP client fix | Open | Sep 10, 2025 |
+| #474 | - | ByteWanderer25 | dev_volume improvements | Open | Sep 4, 2025 |
+| #472 | - | VinceJuliano | Remote cache failure handling | Open | Sep 2, 2025 |
+| #452 | - | samuelmanzanera | Slot normalization | Open | Aug 22, 2025 |
+| #443 | - | PeterFarber | OVMF firmware support | Open | Aug 15, 2025 |
+| #433 | - | Jonny-Ringo | Online Ping Device | Open | Aug 8, 2025 |
+| #408 | - | shyba | Tag limits enforcement | Open | Jul 25, 2025 |
+| #401 | - | parthks | ETH address encoding | Open | Jul 18, 2025 |
+| #399 | - | micovi | Cron list endpoint | Open | Jul 16, 2025 |
+| #393 | - | Alex-wuhu | WASI-NN AI inference | Open | Jul 11, 2025 |
+| #392 | - | JamesPiechota | ANS-104 tag clash | Open | Jul 10, 2025 |
+| #390 | - | NickJ202 | hyperbuddy-ui upgrade | Open | Jul 8, 2025 |
+| #386 | - | Alex-wuhu | GPU attestation device | Open | Jul 3, 2025 |
+| #375 | - | samcamwilliams | Wallet management device | Open | Jun 20, 2025 |
+
+#### Recently Merged PRs (Post-Release)
+
+| PR # | Branch | Author | Title | Merged Date |
+|------|--------|--------|-------|-------------|
+| #618 | expr/1.5 | samcamwilliams | Type checking and varying | Jan 20, 2026 |
+| #617 | - | samcamwilliams | Message extension | Jan 19, 2026 |
+| #610 | - | samcamwilliams | content-type preservation | Jan 14, 2026 |
+| #609 | - | samcamwilliams | Message integrity topics | Jan 7, 2026 |
+| #608 | - | samcamwilliams | Commitment formatting | Jan 7, 2026 |
+| #607 | - | Lucifer0x17 | Process timing improvements | Jan 7, 2026 |
+| #606 | - | samcamwilliams | Process message integrity | Jan 7, 2026 |
+| #604 | - | samcamwilliams | Message corruption tooling | Jan 6, 2026 |
+| #600 | - | samcamwilliams | Event groups tidying | Jan 7, 2026 |
+| #599 | - | samcamwilliams | Device inheritance | Dec 20, 2025 |
+| #597 | - | samcamwilliams | Nearest hashpath salt | Dec 18, 2025 |
+| #595 | - | samcamwilliams | Commitment-ids verification | Dec 17, 2025 |
+| #594 | - | samcamwilliams | Nearest routing salt | Dec 17, 2025 |
+| #593 | - | samcamwilliams | Assignment linking | Dec 16, 2025 |
+| #591 | - | jfrain99 | Dedup trie overwrite | Dec 16, 2025 |
+| #590 | - | samcamwilliams | Device key exports | Dec 14, 2025 |
+| #589 | - | samcamwilliams | Invariant testing framework | Dec 14, 2025 |
+| #588 | - | NickJ202 | Commitment spec uploads | Dec 12, 2025 |
+| #587 | - | PeterFarber | Gateway sub-path fix | Dec 11, 2025 |
+| #582 | - | speeddragon | Manifest redirect ID | Dec 10, 2025 |
+| #578 | - | samcamwilliams | Manifest performance | Dec 6, 2025 |
+| #575 | - | samcamwilliams | Data item/GraphQL tweaks | Nov 30, 2025 |
+| #573 | - | jfrain99 | Dedup in genesis-wasm | Dec 1, 2025 |
+| #572 | - | samcamwilliams | Downstream push routing | Nov 26, 2025 |
+| #569 | - | samcamwilliams | ~process@1.0 library | Nov 24, 2025 |
+| #567 | - | speeddragon | Gateway double read fix | Dec 10, 2025 |
+| #565 | - | speeddragon | Default timeout values | Nov 23, 2025 |
+| #564 | - | samcamwilliams | ANS-104 path key fix | Nov 21, 2025 |
+| #562 | - | NickJ202 | Commitment spec in opts | Nov 20, 2025 |
+| #561 | - | NickJ202 | Commitment spec choice | Nov 20, 2025 |
+| #560 | - | NickJ202 | Scheduler assignment upload | Nov 20, 2025 |
+| #558 | - | samcamwilliams | Hash-chain metadata | Nov 19, 2025 |
+| #555 | - | Jonny-Ringo | Documentation patch | Nov 14, 2025 |
+| #553 | - | speeddragon | URL/hash confusion | Nov 19, 2025 |
+| #551 | - | NickJ202 | GraphQL parsing | Nov 11, 2025 |
+| #550 | - | jfrain99 | Ordered routes | Nov 7, 2025 |
+| #549 | - | speeddragon | Documentation typo | Nov 7, 2025 |
+| #547 | - | jfrain99 | Commit with opts only | Dec 10, 2025 |
+| #546 | - | jfrain99 | Lua ledger tests | Dec 10, 2025 |
+| #544 | - | samcamwilliams | Multi-filter copycat | Nov 1, 2025 |
+| #543 | - | jfrain99 | Load before scheduling | Nov 1, 2025 |
+| #542 | - | samcamwilliams | Store start/greeter | Oct 31, 2025 |
+| #540 | - | jfrain99 | Commitment normalization | Oct 30, 2025 |
+| #539 | - | samcamwilliams | Execution efficiency | Oct 30, 2025 |
+| #538 | - | jfrain99 | Read target commit | Oct 29, 2025 |
+| #537 | - | samcamwilliams | Key normalization | Oct 29, 2025 |
+| #536 | - | NickJ202 | Prometheus registry | Oct 30, 2025 |
+| #535 | feat/bundler | JamesPiechota | HyperBEAM bundler | Nov 20, 2025 |
+| #534 | - | jfrain99 | Trust WjnS checkpoints | Oct 31, 2025 |
+| #532 | - | samcamwilliams | ID normalization perf | Oct 22, 2025 |
+| #531 | - | jfrain99 | Route labels metrics | Oct 22, 2025 |
+| #530 | - | noahlevenson | Greeter typo | Oct 22, 2025 |
+| #529 | - | samcamwilliams | Lua normalization | Oct 21, 2025 |
+| #527 | - | samcamwilliams | Message param naming | Oct 20, 2025 |
+| #526 | - | jyeshe | Data size 404 fix | Oct 20, 2025 |
+| #525 | - | jfrain99 | Route HTTP monitor | Oct 20, 2025 |
+| #524 | - | samcamwilliams | Header ID normalization | Oct 20, 2025 |
+| #523 | - | samcamwilliams | Erlang node naming | Oct 17, 2025 |
+| #522 | - | samcamwilliams | Process cache scoping | Oct 17, 2025 |
+| #521 | - | jfrain99 | Import legacy test | Oct 16, 2025 |
+| #518 | - | jfrain99 | Int normalization | Oct 13, 2025 |
+| #516 | - | samcamwilliams | AO-Core nomenclature | Oct 10, 2025 |
+| #513 | - | samcamwilliams | JSON iface data fields | Oct 9, 2025 |
+| #512 | - | jfrain99 | Public key to wasm | Oct 8, 2025 |
+| #509 | - | noahlevenson | Radix trie device | Oct 16, 2025 |
+| #508 | - | samcamwilliams | Hook resolution | Oct 7, 2025 |
+| #507 | - | samcamwilliams | Cron cache fix | Oct 7, 2025 |
+| #506 | - | samcamwilliams | Process cache perf | Oct 7, 2025 |
+| #504 | - | noahlevenson | Trie 404 balance fix | Oct 4, 2025 |
+| #485 | - | VanshSahay | httpsig_proxy fix | Oct 22, 2025 |
 
 ---
 
@@ -448,77 +597,91 @@ Client POST → dev_bundler → Batch Creation → dev_bundler_dispatch → Arwe
 
 ## Part 5: Future Release Predictions
 
-### 5.1 v0.9-milestone-4 (Expected: Q1 2026)
+### 5.1 Milestone 4 (M4) - OFFICIAL ROADMAP
 
-**Based on Merged PRs and Near-Complete Work**:
+Based on the **official @aoTheComputer announcement (Jan 22, 2026)**, M4 will focus on:
 
-| Feature | Source | Status |
-|---------|--------|--------|
-| Message integrity tooling | PR #604 | Merged |
-| Paranoid mode topics | PR #609 | Merged |
-| Device inheritance | PR #599 | Merged |
-| Manifest redirects/perf | PR #578 | Merged |
-| HyperBEAM bundler | PR #535 | Merged |
-| GraphQL improvements | PR #575 | Merged |
-| Process library | PR #569 | Merged |
-| Invariant testing | PR #589 | Merged |
+#### 🎯 M4 Core Features (Confirmed)
 
-**Likely PRs to Merge**:
-- #614: content-digest preservation
-- #612: path-id handling
-- #611: cache loading fix
-- #613: paranoid TX fetch
-- #556: HTTP relay hardening
+| Feature | Description | Branch/PR Evidence | Readiness |
+|---------|-------------|-------------------|-----------|
+| **Decentralized Schedulers** | Distributed scheduling across nodes | impr/scheduler-assignments, PR #561 | 70% |
+| **LiveNet Staking Marketplace** | Token staking infrastructure | feat/native-tokens, feat/mint-indexes | 60% |
+| **Streaming Token Distributions** | Real-time token streaming | feat/mint-indexes, ~security@1.0 | 50% |
 
-### 5.2 AO 1.5 / v1.0 (Expected: Q2-Q3 2026)
+#### M4 Supporting Infrastructure (From Branch Analysis)
+
+| Feature | Source | Status | Commits |
+|---------|--------|--------|---------|
+| Message integrity tooling | PR #604 | ✅ Merged | 5+ |
+| Paranoid mode topics | PR #609 | ✅ Merged | 3+ |
+| Device inheritance | PR #599 | ✅ Merged | 2+ |
+| HyperBEAM bundler | PR #535 | ✅ Merged | 30+ |
+| Invariant testing | PR #589 | ✅ Merged | 40+ |
+| Inter-process subscriptions | feat/mint-indexes | In Progress | 50+ |
+| Security device (~security@1.0) | feat/native-tokens | In Progress | 45+ |
+
+#### PRs Likely to Merge for M4:
+| PR # | Title | Author | Priority |
+|------|-------|--------|----------|
+| #614 | content-digest preservation | droter | High |
+| #612 | path-id handling | JamesPiechota | High |
+| #611 | cache loading fix | speeddragon | High |
+| #613 | paranoid TX fetch | speeddragon | High |
+| #556 | HTTP relay hardening | PeterFarber | Medium |
+| #574 | Ed25519 support | speeddragon | Medium |
+
+### 5.2 AO 1.5 / Post-M4 (Expected: Q2-Q3 2026)
 
 **Based on Active Experimental Branches**:
 
-| Feature | Branch | Commits | Readiness |
-|---------|--------|---------|-----------|
-| Type system | expr/1.5 | 60+ | 70% |
-| Micro-AO resolver | expr/micro-ao | 45+ | 60% |
-| Micro-cache | expr/micro-cache | 50+ | 50% |
-| Ed25519 | PR #574 | 17 | 80% |
-| ECDSA | feat/ecdsa_support | 35 | 60% |
-| Inference device | PR #580 | 41 | 70% |
-| S3 store | PR #520 | 20+ | 90% |
+| Feature | Branch | Owner | Commits | Readiness |
+|---------|--------|-------|---------|-----------|
+| Type system | expr/1.5 | samcamwilliams | 60+ | 70% |
+| Micro-AO resolver | expr/micro-ao | samcamwilliams | 45+ | 60% |
+| Micro-cache | expr/micro-cache | samcamwilliams | 50+ | 50% |
+| Ed25519 | PR #574 | speeddragon | 17 | 80% |
+| ECDSA | feat/ecdsa_support | speeddragon | 35 | 60% |
+| Inference device | PR #580 | jax-cn | 41 | 70% |
+| S3 store | PR #520 | speeddragon | 20+ | 90% |
 
-**Detailed Feature List**:
+**AO 1.5 Detailed Features**:
 
 1. **Message Type System** (from expr/1.5):
    - BEAM file type parsing
    - Schema validation
    - Message varying/extension
+   - **Owner**: samcamwilliams
 
 2. **Enhanced Cryptography**:
-   - Ed25519 signatures (PR #574)
-   - ECDSA support (feat/ecdsa_support)
+   - Ed25519 signatures (PR #574) - **Owner**: speeddragon
+   - ECDSA support (feat/ecdsa_support) - **Owner**: speeddragon
    - Improved commitment handling
 
 3. **AI/ML Integration** (PR #580):
    - OpenAI-compatible inference API
    - SEV GPU attestation
    - Streaming SSE responses
+   - **Owner**: jax-cn
 
 4. **Storage Options**:
-   - S3 store (PR #520)
-   - Micro-cache optimization
+   - S3 store (PR #520) - **Owner**: speeddragon
+   - Micro-cache optimization - **Owner**: samcamwilliams
 
-### 5.3 v1.5+ (Long-term)
+### 5.3 Long-term Roadmap (v1.5+)
 
 **Based on Feature Branches and Issues**:
 
-| Feature | Source | Status |
-|---------|--------|--------|
-| Native tokens | feat/native-tokens | Development |
-| Mint system | feat/mint-indexes | Development |
-| Inter-process subscriptions | feat/mint-indexes | Development |
-| Security enforcement | ~security@1.0 | Development |
-| WebSocket device | Issue #317 | Planned |
-| HTTP/3 support | Issue #327 | In Progress |
-| Docker publishing | Issue #169 | Planned |
-| SNP attestation | feat/c_snp | Development |
+| Feature | Source | Owner | Status |
+|---------|--------|-------|--------|
+| Native tokens | feat/native-tokens | samcamwilliams | Development |
+| Mint system | feat/mint-indexes | samcamwilliams | Development |
+| Inter-process subscriptions | feat/mint-indexes | samcamwilliams | Development |
+| Security enforcement | ~security@1.0 | samcamwilliams | Development |
+| SNP attestation | feat/c_snp | PeterFarber | Development |
+| WebSocket device | Issue #317 | - | Planned |
+| HTTP/3 support | Issue #327 | - | In Progress |
+| Docker publishing | Issue #169 | - | Planned |
 
 ---
 
@@ -610,23 +773,36 @@ Client POST → dev_bundler → Batch Creation → dev_bundler_dispatch → Arwe
 
 ## Conclusion
 
-HyperBEAM is undergoing a **fundamental evolution** from v0.9-milestone-3-beta-3 toward a production-ready **AO 1.5** release. Analysis of 500+ commits across 198 branches reveals:
+HyperBEAM is undergoing a **fundamental evolution** from v0.9-milestone-3-beta-3 toward **Milestone 4 (M4)**. Analysis of 500+ commits across 198 branches, combined with the **official @aoTheComputer announcement (Jan 22, 2026)**, reveals:
 
-### Immediate Focus (Q1 2026)
-- Message integrity and paranoid mode
-- Bundler production readiness
-- Gateway and manifest improvements
+### ✅ Completed (M1-M3)
+- **M1**: AO Core foundation
+- **M2**: Native Execution & TEE Support
+- **M3**: LegacyNet Migration (100x performance gains)
 
-### Medium-term Focus (Q2-Q3 2026)
-- AO 1.5 type system
+### 🎯 M4 Focus (Current)
+Per official announcement:
+- **Decentralized Schedulers** - Distributed scheduling infrastructure
+- **LiveNet Staking Marketplace** - Token staking and marketplace
+- **Streaming Token Distributions** - Real-time token streaming
+
+### 📊 Branch Activity Supporting M4
+| Owner | Active Branches | Focus |
+|-------|----------------|-------|
+| samcamwilliams | expr/1.5, expr/micro-ao, feat/native-tokens | Core protocol, tokens |
+| speeddragon | feat/ecdsa_support, fix/* branches | Cryptography, fixes |
+| JamesPiechota | feat/arweave-id-offset-indexing | Indexing, bundler |
+| noahlevenson | impr/secure-actions | Security testing |
+| PeterFarber | feat/c_snp | TEE attestation |
+
+### 🔮 Post-M4 Vision (AO 1.5+)
+- Message type system (expr/1.5 - 60+ commits)
 - Multi-signature support (Ed25519, ECDSA)
-- AI inference integration
-- S3 storage option
-
-### Long-term Vision (2026+)
-- Native token economy
-- Inter-process subscriptions
-- WebSocket devices
+- AI inference integration (PR #580)
+- Micro-cache optimization
 - Full TEE attestation suite
 
-The experimental branches (expr/1.5, expr/micro-ao, expr/micro-cache) show active research that will define the next major protocol version, while feature branches demonstrate practical infrastructure improvements ready for production deployment.
+> *"The mainnet migration is complete. Now comes the real unlock 🔓"*
+> — @aoTheComputer, January 22, 2026
+
+The experimental branches (expr/1.5, expr/micro-ao, expr/micro-cache) show active research defining the next protocol version, while the official M4 roadmap confirms focus on **decentralized schedulers, staking marketplace, and streaming token distributions**.
