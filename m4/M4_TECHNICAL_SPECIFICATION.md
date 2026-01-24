@@ -13,7 +13,7 @@
 
 | Feature | What It Does | Key Innovation |
 |---------|--------------|----------------|
-| **Decentralized Schedulers** | Distributed message ordering across multiple nodes | Lookahead caching, nonce-based registration, peer notification |
+| **Decentralized Schedulers** | Stake-to-participate economic layer for schedulers | Collateral-backed operators, slashable misbehavior, reward distribution |
 | **LiveNet Staking** | Non-fungible stake vaults with FIFO unstaking | Cooldown exploit prevention, O(n) time-indexed finalization |
 | **Streaming Tokens** | Real-time on-demand minting (POT model) | Chi-proportional accumulation, zero computation until query |
 | **AO-Core 1.5** | Message type system with BEAM file parsing | Remote device loading, trust verification, type-aware routing |
@@ -41,102 +41,77 @@
 
 ## 1.1 Overview
 
-Decentralized Schedulers distribute message ordering across multiple HyperBEAM nodes, eliminating single points of failure. Each scheduler registers its location on Arweave and notifies peers, enabling automatic discovery and failover.
+Decentralized Schedulers is the economic layer enabling anyone to run a scheduler by staking AO tokens. Instead of a fixed set of trusted schedulers, operators join the network by locking tokens as collateral, participate in message ordering, and earn token rewards proportional to their stake and availability.
 
-**Related Branches**: `impr/scheduler-assignments`, `impr/scheduler-proxy`, `feat/aos2-scheduler-formats`
+**Core Concept**: Schedulers must "put skin in the game" to participate. Stakes can be slashed for misbehavior, incentivizing honest operation.
 
-## 1.2 Scheduler Device Interface
+**Related Branches**: `feat/livenet`, `expr/pot`, `feat/mint`
 
-### Exported Functions
+## 1.2 Scheduler Economic Model
 
-| Function | Purpose |
-|----------|---------|
-| `info/0` | Returns device metadata and routing configuration |
-| `schedule/3` | Routes scheduling requests based on HTTP method (GET retrieves, POST adds) |
-| `router/4` | Default request handler for unmatched routes |
-| `location/3` | Manages scheduler location registration and queries |
-| `slot/3` | Returns current slot number for a process |
-| `status/3` | Returns scheduler wallet address and process registry status |
-| `next/3` | Fetches next assignment with lookahead optimization |
-| `parse_schedulers/1` | Parses comma-separated scheduler location strings |
-| `start/0` | Initializes RocksDB storage and random seed |
-| `checkpoint/1` | Persists scheduler state |
+### Entry Requirements
 
-### Schedule Operation
+To become a scheduler, an operator must:
 
-The schedule function behaves differently based on HTTP method:
-- **GET**: Retrieves existing assignments from the schedule, supports slot range queries
-- **POST**: Validates message signatures, assigns sequential slot number, stores locally and optionally uploads to Arweave
+1. **Stake Tokens**: Lock AO tokens via the LiveNet staking system
+2. **Register Location**: Publish scheduler URL to the network
+3. **Maintain Availability**: Respond to scheduling requests within expected timeframes
 
-## 1.3 Slot Normalization
+### Reward Mechanism
 
-### Problem
-Legacy AO-TN.1 schedulers use a `nonce` field instead of `slot`, causing compatibility issues.
+Scheduler rewards flow through the Streaming Token (POT) system:
 
-### Solution
-The scheduler automatically detects and converts legacy format:
-- Extracts `nonce` field from incoming assignments
-- Converts to integer and stores as `slot`
-- Wraps message bodies with ANS-104 commitments when required by legacy schedulers
+| Component | Role |
+|-----------|------|
+| `dev_pot.erl` | Tracks chi-proportional yield accumulation |
+| `dev_livenet.erl` | Manages scheduler stake and availability |
+| `livenet.lua` | Handles stake vaults with FIFO ordering |
 
-### Validation
-Each assignment's slot is validated against expected sequential progression. Mismatches return detailed error information including expected vs actual slot numbers.
+Rewards are calculated on-demand using the chi model. Each staked token earns a share of newly minted tokens proportional to time staked.
 
-## 1.4 Lookahead Caching Mechanism
+### Slashing Conditions
 
-### Purpose
-Reduces latency by predictively fetching the next assignment before it's requested.
+The current implementation includes a Slash handler for removing stake from misbehaving schedulers. Slashing parameters are set during `join_network`:
 
-### How It Works
+| Parameter | Purpose |
+|-----------|---------|
+| `max-penalties-per-epoch` | Threshold before scheduler removal |
+| `token-per-failed-request` | Penalty amount per availability failure |
+| `min-complainers` | Minimum reports required for consensus |
 
-1. **Worker Spawning**: When an assignment is successfully fetched, a background Erlang process is spawned to fetch slot+1
-2. **Caching**: The worker stores results in local cache upon completion
-3. **Retrieval**: Next request checks for cached worker results first (1.5 second timeout)
-4. **Fallback**: If timeout expires, falls back to synchronous fetch
-5. **Continuation**: Successful cache hits trigger spawning of next worker, maintaining the pipeline
+**Note**: The slashing mechanism is currently admin-triggered. Decentralized slashing via voting or proof-of-misbehavior is planned but not yet implemented.
 
-### Configuration Options
+## 1.3 Network Registration
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `scheduler_lookahead` | boolean | true | Enable/disable prefetching |
+### join_network Interface
 
-## 1.5 Decentralized Location Registration
+When a scheduler joins the network, it provides:
 
-### Registration Flow
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scheduler-id` | binary | Unique scheduler identifier |
+| `stake-amount` | integer | AO tokens to lock |
+| `lock-duration` | integer | Lock period in milliseconds |
 
-1. **Nonce Validation**: New nonce must exceed existing cached nonce (prevents replay attacks)
-2. **Message Construction**: Creates Scheduler-Location message with URL, TTL, nonce, codec preference, and timestamp
-3. **Signing**: Signs message with node's wallet
-4. **Local Storage**: Stores in scheduler cache for immediate availability
-5. **Arweave Upload**: Asynchronously uploads to permanent storage
-6. **Peer Notification**: POSTs location to all configured peer URLs
+The stake is held in a non-fungible vault (see Part 2), preventing cooldown exploitation.
 
-### Location Message Fields
+### Scheduler Discovery
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | string | Always "Scheduler-Location" |
-| `url` | string | HTTP endpoint for this scheduler |
-| `ttl` | integer | Time-to-live in seconds (default: 3600) |
-| `nonce` | integer | Monotonically increasing counter |
-| `codec-device` | string | Preferred codec (default: "httpsig@1.0") |
-| `timestamp` | integer | Registration time in milliseconds |
+Once registered, schedulers are discoverable via:
+- Arweave-stored location messages
+- Peer notification of URL changes
+- Process hints containing scheduler references
 
-### Codec Negotiation
+## 1.4 Relationship to Other M4 Features
 
-Schedulers advertise their preferred message codec. When sending messages:
-- Check target scheduler's `accept-codec` preference
-- Convert message format if needed (e.g., HTTPSig → ANS-104)
-- Re-sign with appropriate codec
+Decentralized Schedulers ties together the other M4 components:
 
-### Location Resolution
+| Feature | Connection to Decentralized Schedulers |
+|---------|----------------------------------------|
+| **LiveNet Staking** | Provides the stake vault infrastructure that holds scheduler collateral |
+| **Streaming Tokens** | Calculates and distributes scheduler rewards using chi-proportional minting |
 
-When routing to a process's scheduler:
-1. Check local cache for scheduler location
-2. Query gateway if not cached
-3. Extract hints from process's scheduler-location field
-4. Follow hint URLs if `scheduler_follow_hints` enabled
+This creates a complete economic loop: stake tokens → run scheduler → earn rewards → stake more or exit
 
 ---
 
