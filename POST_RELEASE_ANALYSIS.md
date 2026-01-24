@@ -926,3 +926,574 @@ Per official announcement:
 > — @aoTheComputer, January 22, 2026
 
 The experimental branches (expr/1.5, expr/micro-ao, expr/micro-cache) show active research defining the next protocol version, while the official M4 roadmap confirms focus on **decentralized schedulers, staking marketplace, and streaming token distributions**.
+
+---
+
+## Part 9: COMPREHENSIVE TECHNICAL ANALYSIS - New Devices & Protocols
+
+### 9.1 Device Architecture Overview
+
+HyperBEAM implements a **device-oriented architecture** where each device is an Erlang module (`dev_*.erl`) that implements the AO-Core protocol. There are **72 device files** in the codebase:
+
+| Category | Devices | Purpose |
+|----------|---------|---------|
+| **Core Process** | `dev_process`, `dev_scheduler`, `dev_push` | Process execution, scheduling, message routing |
+| **Execution** | `dev_wasm`, `dev_genesis_wasm`, `dev_lua` | WASM/Lua runtime execution |
+| **Payment** | `dev_p4`, `dev_simple_pay` | Payment ledger and pricing |
+| **Data Structures** | `dev_trie`, `dev_dedup` | Radix trie, deduplication |
+| **Security/TEE** | `dev_snp`, `dev_poda` | SEV-SNP attestation, proof-of-authority |
+| **Codec** | `dev_codec_*` (14 modules) | Message encoding (ANS-104, HTTPSig, JSON) |
+| **Infrastructure** | `dev_stack`, `dev_multipass`, `dev_hook` | Device composition, multi-pass execution |
+
+### 9.2 Core Device: process@1.0 (`dev_process.erl`)
+
+The **process device** is the central coordinator for AO processes:
+
+```erlang
+%% External API
+GET /ID/Schedule        → Returns messages in the schedule
+POST /ID/Schedule       → Adds a message to the schedule
+GET /ID/Compute/[Slot]  → Returns state after applying a message
+GET /ID/Now             → Returns latest computed results
+```
+
+**Key Mechanisms:**
+
+1. **Device Delegation**: Routes requests to specialized devices (scheduler, execution, push)
+2. **State Caching**: Configurable snapshot frequency via `Cache-Frequency`
+3. **Execution Stack**: Customizable via `Execution-Stack` key
+
+**Example Process Definition:**
+```
+Device: Process/1.0
+Scheduler-Device: Scheduler/1.0
+Execution-Device: Stack/1.0
+Execution-Stack: "Scheduler/1.0", "Cron/1.0", "WASM/1.0", "PoDA/1.0"
+```
+
+**Process State Flow:**
+```
+init() → [load snapshot or init devices]
+       ↓
+compute_to_slot() → [iteratively apply assignments until target slot]
+       ↓
+store_result() → [cache with optional snapshot at configured intervals]
+```
+
+### 9.3 Scheduler Device: scheduler@1.0 (`dev_scheduler.erl`)
+
+**Decentralized Scheduling** is a core M4 feature. The scheduler manages:
+
+```erlang
+%% Exported Functions
+slot/3      → Returns current slot for a process
+next/3      → Gets next assignment from schedule
+schedule/3  → Schedules new messages
+location/3  → Scheduler location registration
+```
+
+**Lookahead Worker Pattern:**
+- Spawns background workers to pre-fetch next assignments
+- Reduces latency through speculative caching
+- Configurable via `scheduler_lookahead` option
+
+**Assignment Caching:**
+```erlang
+find_next_assignment(Msg1, Msg2, Schedule, LastSlot, Opts) ->
+    %% 1. Check message cache (in-memory)
+    %% 2. Check local cache (disk)
+    %% 3. Fetch from SU (remote)
+```
+
+**Scheduler Location Registration** (for decentralization):
+```erlang
+post_location/3 →
+    %% 1. Generate scheduler location message
+    %% 2. Sign with node's wallet
+    %% 3. Upload to Arweave
+    %% 4. Notify configured peers
+```
+
+### 9.4 Stack Device: stack@1.0 (`dev_stack.erl`)
+
+Manages **device composition** with two execution modes:
+
+| Mode | Behavior |
+|------|----------|
+| **Fold** (default) | Sequential execution, passing state forward |
+| **Map** | Parallel execution, combining results |
+
+**Special Status Handling:**
+- `skip` → Skips remaining devices for current pass
+- `pass` → Re-executes stack from first device (multi-pass)
+
+**Prefix System:**
+- `Input-Prefix` → Where device reads input
+- `Output-Prefix` → Where device writes output
+- Enables isolated I/O namespaces per device
+
+### 9.5 WASM Execution: wasm@1.0 (`dev_wasm.erl`)
+
+**Memory-64 WebAssembly execution** using WAMR (WebAssembly Micro Runtime):
+
+```erlang
+init/3      → Boots WASM image, creates executor instance
+compute/3   → Calls WASM function with parameters
+snapshot/3  → Serializes WASM memory state
+normalize/3 → Restores from snapshot if no instance
+terminate/3 → Tears down WASM executor
+```
+
+**Key Features:**
+- AOT (Ahead-of-Time) compilation support (configurable)
+- Import resolver for external function calls
+- State serialization/deserialization for checkpoints
+
+### 9.6 Genesis WASM: genesis-wasm@1.0 (`dev_genesis_wasm.erl`)
+
+**LegacyNet compatibility layer** - enables existing AO processes to run on HyperBEAM:
+
+```erlang
+%% Delegates to external genesis-wasm-server (Node.js)
+compute(Msg, Msg2, Opts) ->
+    {ok, Msg3} = delegated_compute(Msg, Msg2, Opts),
+    %% Apply patch@1.0 for outbox processing
+    patch_result(Msg3, <<"/results/outbox">>)
+```
+
+**Architecture:**
+- Spawns Node.js-based genesis-wasm-server
+- Communicates via HTTP at configurable port (default: 6363)
+- Uses RocksDB for state persistence
+
+### 9.7 Payment System: p4@1.0 (`dev_p4.erl`)
+
+**Core Payment Ledger** with pluggable pricing and ledger devices:
+
+```erlang
+%% Configuration
+p4_pricing-device: Device that estimates request costs
+p4_ledger-device:  Device that manages payment ledger
+
+%% Pricing Device API
+GET /estimate?type=pre|post&body=[...]&request=Req
+GET /price?type=pre|post&body=[...]&request=Req
+
+%% Ledger Device API
+POST /credit?message=PaymentMsg&request=Req
+POST /charge?amount=Price&request=Req
+GET /balance?request=Req
+```
+
+**Request Flow:**
+```
+1. request/3 → Estimate cost, check balance
+2. [Execute actual request]
+3. response/3 → Calculate final price, charge account
+```
+
+**Non-Chargeable Routes:**
+```erlang
+-define(DEFAULT_NON_CHARGABLE_ROUTES, [
+    #{ <<"template">> => <<"/~p4@1.0/balance">> },
+    #{ <<"template">> => <<"/~p4@1.0/topup">> },
+    #{ <<"template">> => <<"/~meta@1.0/*">> }
+]).
+```
+
+### 9.8 Simple Pay: simple-pay@1.0 (`dev_simple_pay.erl`)
+
+**Per-request pricing** with operator controls:
+
+```erlang
+%% Pricing Rules (in order)
+1. Operator requests → cost = 0
+2. Matched route with explicit price → use route price
+3. Default → (message_count × simple_pay_price) + apply_subrequest_cost
+```
+
+**Ledger Operations:**
+- `estimate/3` → Calculate request cost
+- `charge/3` → Debit account balance
+- `balance/3` → Query account balance
+- `topup/3` → Credit account (operator only)
+
+---
+
+## Part 10: M4-SPECIFIC DEVICES & PROTOCOLS
+
+### 10.1 POT Device: pot@1.0 (expr/pot branch)
+
+**Proof-of-Token** - Experimental real-time on-demand minting:
+
+**Chi-Proportional Accumulation Model:**
+```erlang
+%% Core Formula
+units_minted_between(Remaining, Proportion, Steps) ->
+    Remaining * (1 - pow(1 - Proportion, Steps))
+
+%% Per-Unit Reward Distribution
+reward_per_resource_unit(TotalMinted, DepositQuantity, TotalDeposits) ->
+    (TotalMinted * DepositQuantity) div TotalDeposits
+```
+
+**Key State Variables:**
+| Key | Purpose |
+|-----|---------|
+| `minted` | Total units minted to date |
+| `mint-cap` | Maximum mintable supply |
+| `mint-prop` | Proportion per time-step |
+| `last-drip` | Timestamp of last calculation |
+| `chi` | Cumulative yield per resource unit |
+
+**Balance Calculation:**
+```erlang
+Balance = ExistingBalance + (CurrentChi - InitialChi) * DepositAmount
+```
+
+### 10.2 Token Device: token@1.0 (expr/pot branch)
+
+**Fast AO Token Specification** with trie-based storage:
+
+```erlang
+%% Transfer Flow
+transfer(State, Req, Opts) ->
+    From = extract_from(Req),
+    Recipient = extract_recipient(Req),
+    Quantity = extract_quantity(Req),
+
+    %% Validation
+    assert(Quantity >= 0),
+    assert(get_balance(From) >= Quantity),
+
+    %% Update balances via trie
+    NewState = update_trie(State, From, -Quantity),
+    FinalState = update_trie(NewState, Recipient, +Quantity),
+
+    %% Send notices
+    send_credit_notice(From),
+    send_debit_notice(Recipient),
+
+    {ok, FinalState}
+```
+
+**Mint Authority Checking:**
+```erlang
+enforce_mint_authority(Req, State, Opts) ->
+    Requester = get_signer(Req),
+    Authority = get_key(<<"mint-authority">>, State),
+    case Requester == Authority of
+        true  -> {ok, authorized};
+        false -> {error, <<"Mint authority mismatch">>}
+    end
+```
+
+**Benchmarks** (feat/token-device):
+- 100 transfers: **1.7 seconds**
+- 10,000 recipients: **655 milliseconds**
+
+### 10.3 Mint Math: dev_mint_math.erl (expr/pot branch)
+
+**Precision-safe distribution mathematics** using Erlang bignums:
+
+**Core Formulas:**
+```erlang
+%% Distribution per holder (multiplication before division)
+Units = (UnitsForResource * Quantity) div TotalQuantity
+
+%% Supply per cycle
+CycleSupply = (Remaining * CycleProportionNumerator) div CycleProportionDenominator
+
+%% Resource weighting
+UnitsPerResource = (TotalToDistribute * Weight) div TotalWeights
+```
+
+**Precision Loss Prevention:**
+- All operations use native bignum (no float conversion)
+- Multiplication BEFORE division to prevent rounding to zero
+- Dust tracking: Unallocated units carried forward
+
+### 10.4 Radix Trie: trie@1.0 (feat/livenet branch)
+
+**Efficient balance storage** with radix-256 implementation:
+
+**Architecture:**
+```erlang
+%% Radix-256: Each node has up to 256 children
+-define(RADIX, 256).
+
+%% Implicit leaf optimization: Collapses leaf nodes into parents
+%% "car" stored as: <<"car">> => Value (no intermediate nodes)
+```
+
+**Operations:**
+| Function | Complexity | Description |
+|----------|------------|-------------|
+| `insert/4` | O(key length) | Add/update key-value |
+| `retrieve/3` | O(key length) | Get value by key |
+| `keys/2` | O(n) | List all keys |
+
+**Match Types:**
+1. **No Match** → Create implicit leaf
+2. **Full Match** → Recurse or transform leaf to internal
+3. **Partial Match** → Split and reattach subtries
+
+### 10.5 LiveNet Device (feat/livenet branch)
+
+**Staking marketplace infrastructure** (specification stage):
+
+**Configuration Parameters:**
+```erlang
+%% join_network parameters
+<<"stake-amount">>           → AO token commitment
+<<"lock-duration">>          → Lock period (milliseconds)
+<<"max-penalties-per-epoch">> → Slashing threshold
+<<"token-per-failed-request">> → Penalty amount
+<<"min-complainers">>        → Consensus for slashing
+```
+
+**Security Features (planned):**
+- **Non-fungible stake vaults** → Prevents cooldown exploit
+- **Time-based indexing** → Optimizes auto_finalize
+- **O(n²) to O(n) optimization** → Performance improvement for removals
+
+---
+
+## Part 11: SECURITY & TEE INTEGRATION
+
+### 11.1 SEV-SNP Attestation: snp@1.0 (`dev_snp.erl`)
+
+**AMD SEV-SNP hardware attestation** for confidential computing:
+
+```erlang
+%% Verification Steps
+verify(M1, M2, Opts) ->
+    1. verify_nonce()              → Nonce matches address + node ID
+    2. verify_signature_and_address() → Valid signature from expected address
+    3. verify_debug_disabled()     → Production mode enforced
+    4. verify_trusted_software()   → Firmware/kernel match whitelist
+    5. verify_measurement()        → Launch digest matches
+    6. verify_report_integrity()   → Hardware root of trust
+```
+
+**Committed Parameters:**
+```erlang
+-define(COMMITTED_PARAMETERS, [
+    vcpus, vcpu_type, vmm_type, guest_features,
+    firmware, kernel, initrd, append
+]).
+```
+
+**Report Generation:**
+```erlang
+generate(_M1, _M2, Opts) ->
+    Address = get_wallet_address(Opts),
+    NodeMsgID = compute_node_message_id(Opts),
+    ReportData = generate_nonce(Address, NodeMsgID),
+    {ok, ReportJSON} = dev_snp_nif:generate_attestation_report(ReportData),
+    {ok, #{
+        <<"local-hashes">> => TrustedConfig,
+        <<"nonce">> => encode(ReportData),
+        <<"address">> => Address,
+        <<"report">> => ReportJSON
+    }}
+```
+
+### 11.2 Proof of Delegated Authority: poda@1.0 (`dev_poda.erl`)
+
+**Decentralized consensus** for AO processes:
+
+**Two-Flow Architecture:**
+1. **Execution Flow**: Initialize → Validate incoming messages
+2. **Commitment Flow**: Add commitments to results
+
+**Validation Stages:**
+```erlang
+validate_stage(1) → Check required PoDA messages present
+validate_stage(2) → Verify all commitment signatures
+validate_stage(3) → Check quorum of valid authorities reached
+```
+
+**Commitment Aggregation:**
+```erlang
+add_commitments(NewMsg, S, Opts) ->
+    %% Get trusted authorities from process
+    Authorities = extract_authorities(Process),
+    Quorum = extract_quorum(Process),
+
+    %% Gather commitments from peer compute nodes (parallel)
+    Commitments = pfiltermap(
+        fun(Authority) ->
+            {ok, CU} = find_compute_node(Authority),
+            request_commitment(CU, MsgID)
+        end,
+        Authorities
+    ),
+
+    %% Bundle commitments with local signature
+    create_commitment_bundle(Commitments, LocalCommitment)
+```
+
+### 11.3 Deduplication: dedup@1.0 (`dev_dedup.erl`)
+
+**Message deduplication** for idempotent execution:
+
+```erlang
+%% Deduplication Logic
+handle(Key, M1, M2, Opts) ->
+    Subject = get_subject(M1, M2, Opts),
+    SubjectID = compute_id(Subject),
+    DedupList = get_seen_list(M1),
+
+    case lists:member(SubjectID, DedupList) of
+        true  -> {skip, M1};              %% Already processed
+        false -> {ok, add_to_seen(M1, SubjectID)}
+    end
+```
+
+**Multipass Compatibility:**
+- Only runs on first pass (`pass == 1`)
+- Allows `multipass@1.0` to re-execute without interference
+
+---
+
+## Part 12: MESSAGE ROUTING & PUSH MECHANISM
+
+### 12.1 Push Device: push@1.0 (`dev_push.erl`)
+
+**Recursive message propagation** across processes:
+
+```erlang
+%% Push Flow
+push(Base, Req, Opts) ->
+    1. schedule_initial_message()  → Schedule message on process
+    2. compute_outbox()            → Execute and get outbox
+    3. for each outbox message:
+       a. resolve_target_process()
+       b. apply_security_policy()
+       c. schedule_result()
+       d. recurse: push()
+```
+
+**Security Policy Application:**
+```erlang
+apply_security(Msg, TargetProcess, Codec, Opts) ->
+    1. Check process `policy` key → Custom accept-committers
+    2. Check process `authority` key → Sign with matching local keys
+    3. Default → Sign with node's default wallet
+```
+
+**Redirect Handling:**
+- Status 307 → Follow redirect to new scheduler
+- Codec downgrade: HTTPSig → ANS-104 if needed
+
+### 12.2 Multipass: multipass@1.0 (`dev_multipass.erl`)
+
+**Multi-pass execution** trigger:
+
+```erlang
+handle(_Key, M1, _M2, Opts) ->
+    Passes = get(<<"passes">>, M1, 1),
+    Pass = get(<<"pass">>, M1, 1),
+    case Pass < Passes of
+        true  -> {pass, M1};   %% Request another pass
+        false -> {ok, M1}      %% Complete
+    end
+```
+
+**Usage in Stack:**
+```
+Device-Stack: ["wasm@1.0", "patch@1.0", "multipass@1.0"]
+passes: 2
+```
+
+---
+
+## Part 13: CODEC SYSTEM
+
+HyperBEAM supports multiple message encoding formats via **14 codec devices**:
+
+| Codec | Device | Purpose |
+|-------|--------|---------|
+| ANS-104 | `dev_codec_ans104` | Arweave bundle format |
+| HTTPSig | `dev_codec_httpsig` | HTTP Signature signing |
+| JSON | `dev_codec_json` | JSON serialization |
+| Flat | `dev_codec_flat` | Simplified encoding |
+| Cookie | `dev_codec_cookie` | Session management |
+| Structured | `dev_codec_structured` | Structured field format |
+
+**Codec Conversion Flow:**
+```
+HTTPSig message → [verify signature] → Internal format → [re-sign] → ANS-104
+```
+
+---
+
+## Part 14: PROTOCOL EVOLUTION - AO 1.5 (expr/1.5 branch)
+
+The **expr/1.5 branch** (60+ commits) introduces a **message type system**:
+
+**Type System Components:**
+- BEAM file parsing for type extraction
+- Message classification and validation
+- Type-aware routing and execution
+
+**Integration Points:**
+- Scheduler: Type-based assignment filtering
+- Execution: Type-validated compute calls
+- Push: Type-aware message propagation
+
+---
+
+## Summary: Technical Stack
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        APPLICATION LAYER                         │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐            │
+│  │ token@  │  │  pot@   │  │livenet@ │  │ mint@   │            │
+│  │  1.0    │  │  1.0    │  │  1.0    │  │  1.0    │            │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘            │
+└───────┼────────────┼────────────┼────────────┼──────────────────┘
+        │            │            │            │
+┌───────┼────────────┼────────────┼────────────┼──────────────────┐
+│       │         CORE DEVICES                 │                   │
+│  ┌────┴────┐  ┌────┴────┐  ┌────┴────┐  ┌────┴────┐            │
+│  │process@ │  │scheduler│  │  push@  │  │  trie@  │            │
+│  │  1.0    │  │  @1.0   │  │  1.0    │  │  1.0    │            │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘            │
+└───────┼────────────┼────────────┼────────────┼──────────────────┘
+        │            │            │            │
+┌───────┼────────────┼────────────┼────────────┼──────────────────┐
+│       │       EXECUTION LAYER                │                   │
+│  ┌────┴────┐  ┌────┴────┐  ┌────┴────┐  ┌────┴────┐            │
+│  │ stack@  │  │ wasm@   │  │genesis- │  │  lua@   │            │
+│  │  1.0    │  │  1.0    │  │ wasm@   │  │  5.3a   │            │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘            │
+└───────┼────────────┼────────────┼────────────┼──────────────────┘
+        │            │            │            │
+┌───────┼────────────┼────────────┼────────────┼──────────────────┐
+│       │       SECURITY LAYER                 │                   │
+│  ┌────┴────┐  ┌────┴────┐  ┌────┴────┐  ┌────┴────┐            │
+│  │  snp@   │  │ poda@   │  │ dedup@  │  │security@│            │
+│  │  1.0    │  │  1.0    │  │  1.0    │  │  1.0    │            │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘            │
+└───────┼────────────┼────────────┼────────────┼──────────────────┘
+        │            │            │            │
+┌───────┼────────────┼────────────┼────────────┼──────────────────┐
+│       │        PAYMENT LAYER                 │                   │
+│  ┌────┴────┐  ┌────┴────┐                                       │
+│  │  p4@    │  │simple-  │                                       │
+│  │  1.0    │  │ pay@1.0 │                                       │
+│  └─────────┘  └─────────┘                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Technical Achievements for M4:**
+1. **72 devices** forming a composable execution framework
+2. **Chi-proportional minting** with precision-safe bignum math
+3. **Radix-256 trie** for efficient balance storage
+4. **Hardware-backed attestation** via AMD SEV-SNP
+5. **Decentralized scheduler** registration and lookahead caching
+6. **Multi-pass device stacks** for complex execution flows
+7. **100x performance gains** through native WASM execution
