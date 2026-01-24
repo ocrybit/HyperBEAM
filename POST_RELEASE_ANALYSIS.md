@@ -36,12 +36,132 @@ The development trajectory points toward **Milestone 4 (M4)** with fundamental p
 ### What's Next for M4:
 | Feature | Description | Related Branches/PRs |
 |---------|-------------|---------------------|
-| **Decentralized Schedulers** | Distributed scheduling infrastructure | feat/native-tokens, impr/scheduler-assignments |
-| **LiveNet Staking Marketplace** | Token staking and marketplace | feat/mint-indexes, feat/native-tokens |
-| **Streaming Token Distributions** | Real-time token distribution system | feat/mint-indexes, ~security@1.0 |
+| **Decentralized Schedulers** | Distributed scheduling infrastructure | impr/scheduler-assignments, impr/scheduler-proxy, feat/aos2-scheduler-formats |
+| **LiveNet Staking Marketplace** | Token staking and marketplace | **feat/livenet**, feat/native-tokens, feat/token-device, wip/lucifer_livenet |
+| **Streaming Token Distributions** | Real-time token distribution system | **feat/mint**, **expr/pot**, feat/mint-indexes, ex/subledger-payments |
 
 > *"The mainnet migration is complete. Now comes the real unlock 🔓"*
 > — @aoTheComputer, January 22, 2026
+
+---
+
+## 🔥 CRITICAL M4 BRANCHES (Previously Missing)
+
+### LiveNet Staking Infrastructure
+
+#### feat/livenet (Lucifer0x17) - Nov 3, 2025
+**Focus**: Core LiveNet staking implementation
+| Date | Commit | Description |
+|------|--------|-------------|
+| Nov 2 | 0c52bb9 | chore: removed duplicated file |
+| Oct 29 | 6cafa14 | **performance: optimize removal from O(n²) to O(n)** |
+| Oct 29 | f7b9f32 | **performance: optimize auto_finalize with time-based index** |
+| Oct 29 | 50b6579 | **security: implement non-fungible stake vaults to prevent cooldown exploit** |
+| Oct 29 | abd7f59 | refactor: simplify livenet.lua to v0 core features |
+| Oct 29 | fe2a1cd | wip: livenet process for hb |
+| Oct 29 | dd46a99 | wip: livenet uncommit is added |
+| Oct 29 | 709fe98 | **init: livenet** |
+
+#### wip/lucifer_livenet (Lucifer0x17, parthks) - Jul 9, 2025
+**Focus**: LiveNet device development
+| Date | Commit | Description |
+|------|--------|-------------|
+| Jul 9 | f78e1a0 | chore: print a particular group from lua scripts |
+| Jul 9 | 26de811 | wip: livenet process for hb |
+| Jul 9 | eba870f | wip: dev_livenet test case |
+| Jul 8 | d849f01 | wip: updated livenet lua script with fix |
+| Jul 8 | beebf62 | init: test livenet device |
+
+### Token Economy & Minting
+
+#### feat/mint (samcamwilliams, Lucifer0x17) - Nov 4, 2025
+**Focus**: Mint v3 implementation
+| Date | Commit | Description |
+|------|--------|-------------|
+| Nov 4 | f9da505 | wip: token blueprint implementation as device |
+| Nov 3 | d4ecfc8 | wip: impl mint with test suite |
+| Nov 3 | e9892f0 | **fix: prevent precision loss in proportional token distribution** |
+| Nov 2 | 4defa30 | wip: add multi-user mint test |
+| Nov 1 | 379aaa2 | **feat: Minimum viable implementation of mint v3 flow** |
+| Nov 1 | fe3b4d1 | feat: add `to` and `from` keys to `~trie@1.0` |
+| Nov 1 | 7887125 | wip: HB-native mint impl. |
+
+#### expr/pot (samcamwilliams) - Nov 5, 2025
+**Focus**: DSR-like POT minter (Proof of Time/Token)
+| Date | Commit | Description |
+|------|--------|-------------|
+| Nov 5 | 316b3d0 | chore: clarify math |
+| Nov 5 | 861c646 | **wip: multi-asset support** |
+| Nov 5 | da61ae4 | **feat: calculate tokens to mint between period in single operation** |
+| Nov 5 | 56cf718 | **wip: add delegation support** |
+| Nov 5 | 0e6dc00 | **feat: on-demand, real-time minting** |
+| Nov 5 | e5759ff | wip: deposit and reward token model |
+| Nov 4 | d9e86a8 | **feat: allow rate to change proportionate to total supply** |
+| Nov 4 | d61f0c2 | **feat: add supply tracking** |
+| Nov 4 | 53bfa4e | **expr: DSR-like pot minter implementation** |
+
+#### feat/token-device (Lucifer0x17) - Nov 14, 2025
+**Focus**: Token@1.0 device implementation
+| Date | Commit | Description |
+|------|--------|-------------|
+| Nov 14 | - | test: add X- tag forwarding tests for transfer notices |
+| Nov 11 | - | **feat: add input validation for security hardening** |
+| Nov 6 | - | fix: action routing in dev_token (binary pattern matching) |
+| Nov 5 | - | **fix: enabled benchmarks - 100 transfers in 1.7s, 10k recipients in 655ms** |
+| Nov 5 | - | **feat: implement secure_set action with authority checking** |
+| Nov 5 | - | **feat: implement mint functionality for token@1.0 device** |
+
+### Payment & Subledger Infrastructure
+
+#### ex/subledger-payments (samcamwilliams) - May 14, 2025
+**Focus**: Subledger-to-subledger transfers and peer ledgers
+| Date | Commit | Description |
+|------|--------|-------------|
+| May 14 | 5da725a | wip: modify `~p4@1.0` example to use subledger |
+| May 14 | 48d6ce1 | impr: add subledger registration multischeduler testing |
+| May 14 | 19d7f70 | **feat: support complex authority and scheduler matching in hyper-token** |
+| May 14 | 056fb50 | **feat: hyper-token.lua supports validating multiple signers** |
+| May 14 | f0ab0e1 | **feat: support multisignature requests for schedulers** |
+| May 13 | ce97dcb | **feat: support multiple identities in hb_opts, scheduler, push** |
+| May 13 | 5d0324a | **feat: peer ledgers, with passing tests** |
+| May 13 | a8e125c | wip: subledger-to-subledger transfers |
+
+#### impr/payments (samcamwilliams) - May 14, 2025
+#### merge/payments - May 15, 2025
+#### rc/tee-payments - May 16, 2025
+**Focus**: TEE payment integration
+#### feat/payment-processes (samcamwilliams) - May 6, 2025
+**Focus**: Payment client and hooks API
+
+### Scheduler Infrastructure
+
+#### impr/scheduler-assignments (samuelmanzanera) - Aug 28, 2025
+**Focus**: Scheduler assignment improvements
+| Date | Commit | Description |
+|------|--------|-------------|
+| Aug 28 | ecdfc32 | impr: simplify slot normalization and wrap body assignments |
+| Aug 27 | - | fixes to HTTP key access, apply API improvements |
+| Aug 26 | - | timeout improvements for scheduler requests |
+
+#### impr/scheduler-proxy (samcamwilliams) - Feb 24, 2025
+**Focus**: Scheduler registration and mainnet onboarding
+| Date | Commit | Description |
+|------|--------|-------------|
+| Feb 24 | 9340d28 | fix: convert ans-104 items if response in that format |
+| Feb 24 | 771968a | wip: register scheduler location testing |
+| Feb 24 | f71a4a8 | wip: scheduler register endpoint |
+| Feb 24 | 7403dc7 | feat: add support for codec-device and accept-codec headers |
+| Feb 23 | 27730ba | **chore: Audited by NCC, Dec'24-Jan'25** |
+| Feb 23 | 17b277a | impr: mainnet options |
+
+### Security & Invariant Testing
+
+#### impr/pot-invariant-tests (noahlevenson) - Dec 15, 2025
+#### impr/pot-invariant-tests-working (noahlevenson) - Jan 6, 2026
+**Focus**: Property-based testing for POT token economics
+
+#### feat/security (samcamwilliams) - Dec 8, 2025
+**Focus**: Security device implementation
 
 ---
 
