@@ -9,43 +9,31 @@
 
 # TL;DR
 
-## What's Coming in M4
+## M4 Feature Summary
 
 | Feature | What It Does | Key Innovation |
 |---------|--------------|----------------|
-| **Decentralized Schedulers** | Distributed message ordering across multiple nodes | Lookahead caching, nonce-based registration, ANS-104 wrapping |
-| **LiveNet Staking** | Non-fungible stake vaults with FIFO unstaking | Cooldown exploit prevention, time-indexed auto-finalization |
-| **Streaming Tokens** | Real-time on-demand minting (POT model) | Chi-proportional accumulation, zero-computation until withdrawal |
+| **Decentralized Schedulers** | Distributed message ordering across multiple nodes | Lookahead caching, nonce-based registration, peer notification |
+| **LiveNet Staking** | Non-fungible stake vaults with FIFO unstaking | Cooldown exploit prevention, O(n) time-indexed finalization |
+| **Streaming Tokens** | Real-time on-demand minting (POT model) | Chi-proportional accumulation, zero computation until query |
 | **AO-Core 1.5** | Message type system with BEAM file parsing | Remote device loading, trust verification, type-aware routing |
 
-## Key Numbers
+## Performance Benchmarks
 
-- **72 device modules** in HyperBEAM core
-- **100 transfers in 1.7 seconds** (token device benchmark)
-- **10,000 recipients in 655ms** (batch distribution)
-- **O(n²) → O(n)** optimization for stake removals
-- **Chi formula**: `Balance = Existing + (CurrentChi - InitialChi) × Deposit`
+| Metric | Value |
+|--------|-------|
+| Token transfers (sequential) | 100 in 1.7 seconds (17ms each) |
+| Token transfers (batch) | 10,000 recipients in 655ms (0.065ms each) |
+| Stake removal optimization | O(n²) → O(n) |
+| Scheduler lookahead timeout | 1.5 seconds |
 
-## Architecture Summary
+## Core Formulas
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    M4 APPLICATION LAYER                      │
-│  LiveNet Staking │ POT Minting │ HyperTokens │ Subledgers   │
-├─────────────────────────────────────────────────────────────┤
-│                    CORE DEVICE LAYER                         │
-│  process@1.0 │ scheduler@1.0 │ push@1.0 │ trie@1.0          │
-├─────────────────────────────────────────────────────────────┤
-│                    EXECUTION LAYER                           │
-│  wasm@1.0 │ genesis-wasm@1.0 │ lua@5.3a │ stack@1.0         │
-├─────────────────────────────────────────────────────────────┤
-│                    SECURITY LAYER                            │
-│  snp@1.0 (SEV-SNP) │ poda@1.0 │ dedup@1.0 │ security@1.0    │
-├─────────────────────────────────────────────────────────────┤
-│                    PAYMENT LAYER                             │
-│  p4@1.0 │ simple-pay@1.0 │ hyper-token.lua                  │
-└─────────────────────────────────────────────────────────────┘
-```
+| Formula | Purpose |
+|---------|---------|
+| `M = R × (1 - (1-p)^t)` | Tokens minted over time period |
+| `Δχ = M / TotalDeposits` | Chi increment per resource unit |
+| `B = Existing + (χ_now - χ₀) × D` | User balance with accrued yield |
 
 ---
 
@@ -53,213 +41,102 @@
 
 ## 1.1 Overview
 
-Decentralized Schedulers enable distributed message ordering across multiple HyperBEAM nodes, eliminating single points of failure and enabling horizontal scaling.
+Decentralized Schedulers distribute message ordering across multiple HyperBEAM nodes, eliminating single points of failure. Each scheduler registers its location on Arweave and notifies peers, enabling automatic discovery and failover.
 
-**Branches**: `impr/scheduler-assignments`, `impr/scheduler-proxy`, `feat/aos2-scheduler-formats`
+**Related Branches**: `impr/scheduler-assignments`, `impr/scheduler-proxy`, `feat/aos2-scheduler-formats`
 
-## 1.2 Scheduler Device API
+## 1.2 Scheduler Device Interface
 
 ### Exported Functions
 
-```erlang
-%% Module: dev_scheduler.erl
--export([
-    info/0,           %% Device metadata and routing config
-    schedule/3,       %% Route scheduling requests (POST/GET)
-    router/4,         %% Default request handler
-    location/3,       %% Scheduler location management
-    slot/3,           %% Current slot for process
-    status/3,         %% Wallet and registry status
-    next/3,           %% Next assignment with lookahead
-    parse_schedulers/1, %% Parse scheduler location strings
-    start/0,          %% Initialize RocksDB and random seed
-    checkpoint/1      %% State persistence
-]).
-```
+| Function | Purpose |
+|----------|---------|
+| `info/0` | Returns device metadata and routing configuration |
+| `schedule/3` | Routes scheduling requests based on HTTP method (GET retrieves, POST adds) |
+| `router/4` | Default request handler for unmatched routes |
+| `location/3` | Manages scheduler location registration and queries |
+| `slot/3` | Returns current slot number for a process |
+| `status/3` | Returns scheduler wallet address and process registry status |
+| `next/3` | Fetches next assignment with lookahead optimization |
+| `parse_schedulers/1` | Parses comma-separated scheduler location strings |
+| `start/0` | Initializes RocksDB storage and random seed |
+| `checkpoint/1` | Persists scheduler state |
 
 ### Schedule Operation
 
-```erlang
-schedule(Msg1, Msg2, Opts) ->
-    case hb_ao:get(<<"method">>, Msg2, <<"GET">>, Opts) of
-        <<"POST">> -> post_schedule(Msg1, Msg2, Opts);
-        <<"GET">>  -> get_schedule(Msg1, Msg2, Opts)
-    end.
-```
+The schedule function behaves differently based on HTTP method:
+- **GET**: Retrieves existing assignments from the schedule, supports slot range queries
+- **POST**: Validates message signatures, assigns sequential slot number, stores locally and optionally uploads to Arweave
 
-**POST /schedule**: Adds message to process schedule
-- Validates message signatures
-- Assigns sequential slot number
-- Stores in local cache + optional Arweave upload
-- Returns assignment with slot number
+## 1.3 Slot Normalization
 
-**GET /schedule**: Retrieves schedule assignments
-- Supports slot range queries
-- Returns assignments with bodies
+### Problem
+Legacy AO-TN.1 schedulers use a `nonce` field instead of `slot`, causing compatibility issues.
 
-## 1.3 Slot Normalization (impr/scheduler-assignments)
+### Solution
+The scheduler automatically detects and converts legacy format:
+- Extracts `nonce` field from incoming assignments
+- Converts to integer and stores as `slot`
+- Wraps message bodies with ANS-104 commitments when required by legacy schedulers
 
-The scheduler normalizes slot values across different assignment formats:
+### Validation
+Each assignment's slot is validated against expected sequential progression. Mismatches return detailed error information including expected vs actual slot numbers.
 
-```erlang
-%% Legacy format conversion (AO-TN.1)
-normalize_assignment(Assignment, Opts) ->
-    case hb_ao:get(<<"nonce">>, Assignment, Opts) of
-        not_found -> Assignment;
-        Nonce ->
-            %% Convert legacy nonce to standard slot
-            Assignment#{<<"slot">> => hb_util:int(Nonce)}
-    end.
+## 1.4 Lookahead Caching Mechanism
 
-%% Slot validation
-validate_next_slot(NextAssignment, LastSlot, Opts) ->
-    NextSlot = hb_util:int(hb_ao:get(<<"slot">>, NextAssignment, Opts)),
-    ExpectedSlot = LastSlot + 1,
-    case NextSlot of
-        ExpectedSlot -> {ok, NextAssignment};
-        _ -> {error, {slot_mismatch, ExpectedSlot, NextSlot}}
-    end.
-```
+### Purpose
+Reduces latency by predictively fetching the next assignment before it's requested.
 
-## 1.4 ANS-104 Assignment Wrapping
+### How It Works
 
-For legacy scheduler compatibility:
+1. **Worker Spawning**: When an assignment is successfully fetched, a background Erlang process is spawned to fetch slot+1
+2. **Caching**: The worker stores results in local cache upon completion
+3. **Retrieval**: Next request checks for cached worker results first (1.5 second timeout)
+4. **Fallback**: If timeout expires, falls back to synchronous fetch
+5. **Continuation**: Successful cache hits trigger spawning of next worker, maintaining the pipeline
 
-```erlang
-post_remote_schedule(Process, Msg, SchedulerURL, Opts) ->
-    %% Generate ANS-104 commitment
-    WithANS104 = hb_message:with_commitments(Msg, <<"ans104@1.0">>, Opts),
+### Configuration Options
 
-    %% Serialize as Arweave bundle item
-    Item = ar_bundles:serialize(WithANS104),
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `scheduler_lookahead` | boolean | true | Enable/disable prefetching |
 
-    %% POST to legacy scheduler endpoint
-    case hb_http:post(SchedulerURL, <<"/schedule">>, Item, Opts) of
-        {ok, Response} ->
-            normalize_assignment(Response, Opts);
-        {error, 422} ->
-            %% Scheduler requires ANS-104 signatures
-            {error, missing_ans104_signature}
-    end.
-```
-
-## 1.5 Lookahead Caching Mechanism
-
-Predictive assignment prefetching for reduced latency:
-
-```erlang
--define(LOOKAHEAD_TIMEOUT, 1500). %% 1.5 seconds
-
-%% Spawn background worker for next slot
-spawn_lookahead_worker(ProcID, TargetSlot, Opts) ->
-    spawn(fun() ->
-        NextSlot = TargetSlot + 1,
-        Result = fetch_assignment(ProcID, NextSlot, Opts),
-        cache_assignment(ProcID, NextSlot, Result)
-    end).
-
-%% Check lookahead cache before remote fetch
-check_lookahead_and_local_cache(ProcID, Slot, Opts) ->
-    case get_lookahead_result(ProcID, Slot, ?LOOKAHEAD_TIMEOUT) of
-        {ok, Assignment} ->
-            %% Spawn next lookahead worker
-            case hb_opts:get(scheduler_lookahead, true, Opts) of
-                true -> spawn_lookahead_worker(ProcID, Slot, Opts);
-                false -> ok
-            end,
-            {ok, Assignment};
-        timeout ->
-            %% Fall back to synchronous fetch
-            fetch_assignment_sync(ProcID, Slot, Opts)
-    end.
-```
-
-## 1.6 Decentralized Scheduler Registration (impr/scheduler-proxy)
+## 1.5 Decentralized Location Registration
 
 ### Registration Flow
 
-```erlang
-post_location(Msg1, Msg2, Opts) ->
-    %% 1. Validate nonce progression
-    ExistingLocation = dev_scheduler_cache:read_location(SchedulerID, Opts),
-    NewNonce = hb_ao:get(<<"nonce">>, Msg2, Opts),
-    case validate_nonce(NewNonce, ExistingLocation) of
-        {error, Reason} -> {error, Reason};
-        ok ->
-            %% 2. Construct location message
-            LocationMsg = #{
-                <<"type">> => <<"Scheduler-Location">>,
-                <<"url">> => hb_ao:get(<<"url">>, Msg2, Opts),
-                <<"ttl">> => hb_ao:get(<<"ttl">>, Msg2, 3600, Opts),
-                <<"nonce">> => NewNonce,
-                <<"codec-device">> => hb_ao:get(<<"codec-device">>, Msg2,
-                    <<"httpsig@1.0">>, Opts),
-                <<"timestamp">> => erlang:system_time(millisecond)
-            },
+1. **Nonce Validation**: New nonce must exceed existing cached nonce (prevents replay attacks)
+2. **Message Construction**: Creates Scheduler-Location message with URL, TTL, nonce, codec preference, and timestamp
+3. **Signing**: Signs message with node's wallet
+4. **Local Storage**: Stores in scheduler cache for immediate availability
+5. **Arweave Upload**: Asynchronously uploads to permanent storage
+6. **Peer Notification**: POSTs location to all configured peer URLs
 
-            %% 3. Sign with node wallet
-            SignedLocation = hb_message:commit(LocationMsg, Opts),
+### Location Message Fields
 
-            %% 4. Store locally
-            dev_scheduler_cache:write_location(SchedulerID, SignedLocation, Opts),
-
-            %% 5. Upload to Arweave (async)
-            spawn(fun() -> hb_client:upload(SignedLocation, Opts) end),
-
-            %% 6. Notify peers
-            Peers = hb_opts:get(scheduler_location_notify_peers, [], Opts),
-            lists:foreach(fun(Peer) ->
-                hb_http:post(Peer, <<"/~scheduler@1.0/location">>,
-                    SignedLocation, Opts)
-            end, Peers),
-
-            {ok, SignedLocation}
-    end.
-```
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Always "Scheduler-Location" |
+| `url` | string | HTTP endpoint for this scheduler |
+| `ttl` | integer | Time-to-live in seconds (default: 3600) |
+| `nonce` | integer | Monotonically increasing counter |
+| `codec-device` | string | Preferred codec (default: "httpsig@1.0") |
+| `timestamp` | integer | Registration time in milliseconds |
 
 ### Codec Negotiation
 
-```erlang
-%% Accept-codec header support
-resolve_codec(Request, Opts) ->
-    hb_ao:get(<<"accept-codec">>, Request, <<"httpsig@1.0">>, Opts).
-
-%% Codec conversion on schedule
-schedule_with_codec(Msg, TargetCodec, Opts) ->
-    CurrentCodec = detect_codec(Msg),
-    case {CurrentCodec, TargetCodec} of
-        {Same, Same} -> {ok, Msg};
-        {<<"httpsig@1.0">>, <<"ans104@1.0">>} ->
-            %% Downgrade: re-sign as ANS-104
-            convert_to_ans104(Msg, Opts);
-        {<<"ans104@1.0">>, <<"httpsig@1.0">>} ->
-            %% Upgrade: wrap in HTTPSig
-            convert_to_httpsig(Msg, Opts)
-    end.
-```
+Schedulers advertise their preferred message codec. When sending messages:
+- Check target scheduler's `accept-codec` preference
+- Convert message format if needed (e.g., HTTPSig → ANS-104)
+- Re-sign with appropriate codec
 
 ### Location Resolution
 
-```erlang
-find_remote_scheduler(ProcessID, Opts) ->
-    %% 1. Check local cache
-    case dev_scheduler_cache:read_location(ProcessID, Opts) of
-        {ok, Location} -> {ok, Location};
-        not_found ->
-            %% 2. Query gateway
-            case hb_gateway:get_scheduler_location(ProcessID, Opts) of
-                {ok, Location} ->
-                    dev_scheduler_cache:write_location(ProcessID, Location, Opts),
-                    {ok, Location};
-                not_found ->
-                    %% 3. Check process hints
-                    case get_scheduler_hint(ProcessID, Opts) of
-                        {ok, Hint} -> resolve_hint(Hint, Opts);
-                        not_found -> {error, no_scheduler_found}
-                    end
-            end
-    end.
-```
+When routing to a process's scheduler:
+1. Check local cache for scheduler location
+2. Query gateway if not cached
+3. Extract hints from process's scheduler-location field
+4. Follow hint URLs if `scheduler_follow_hints` enabled
 
 ---
 
@@ -267,295 +144,105 @@ find_remote_scheduler(ProcessID, Opts) ->
 
 ## 2.1 Overview
 
-LiveNet Staking implements a non-fungible stake vault system where each stake is tracked separately, preventing cooldown exploits and enabling fair FIFO-based unstaking.
+LiveNet Staking implements a non-fungible stake vault system where each stake is tracked individually with its own lock duration. This prevents cooldown exploits where users could bypass waiting periods by rotating tokens.
 
-**Branches**: `feat/livenet`, `feat/native-tokens`, `feat/token-device`, `wip/lucifer_livenet`
+**Related Branches**: `feat/livenet`, `feat/native-tokens`, `feat/token-device`, `wip/lucifer_livenet`
 
-## 2.2 Core Data Structures
+## 2.2 Erlang Device: livenet@1.0
 
-### Stakes Registry
+### Exported Functions
 
-```lua
--- Each address maps to array of stake vaults
-Stakes = {
-    ["address1"] = {
-        {
-            id = "stake_001",
-            amount = 1000,
-            lock_duration = 86400000,  -- 24 hours in ms
-            stake_timestamp = 1706054400000
-        },
-        {
-            id = "stake_002",
-            amount = 500,
-            lock_duration = 172800000,  -- 48 hours in ms
-            stake_timestamp = 1706140800000
-        }
-    }
-}
-```
+| Function | Purpose |
+|----------|---------|
+| `info/1` | Returns device metadata listing exposed functions |
+| `info/3` | Returns HTTP-formatted device description with parameter documentation |
+| `join_network/3` | Registers a scheduler with staking parameters |
+| `schedule/3` | Handles message scheduling with availability monitoring |
 
-### Unstaking Registry (Dual-Indexed)
+### join_network Parameters
 
-```lua
--- Index 1: By user address
-Unstaking = {
-    ["address1"] = {
-        {
-            id = "unstake_001",
-            amount = 500,
-            release_time = 1706227200000
-        }
-    }
-}
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `scheduler-id` | binary | Unique identifier for this scheduler |
+| `stake-amount` | integer | Number of AO tokens to stake |
+| `lock-duration` | integer | Lock period in milliseconds |
+| `max-penalties-per-epoch` | integer | Maximum slashing events before removal |
+| `token-per-failed-request` | integer | Penalty amount per availability failure |
+| `min-complainers` | integer | Minimum reports required for slashing consensus |
 
--- Index 2: By release time (for batch processing)
-UnstakingByTime = {
-    [1706227200000] = {
-        { address = "address1", id = "unstake_001", amount = 500 }
-    },
-    [1706313600000] = {
-        { address = "address2", id = "unstake_002", amount = 300 }
-    }
-}
-```
+### Scheduler State
 
-## 2.3 Staking Functions
+Each registered scheduler is stored with:
+- Stake amount and lock duration
+- Registration timestamp
+- Current status (active/inactive/slashed)
 
-### Stake (via Credit-Notice)
+## 2.3 Lua Script: livenet.lua
 
-```lua
-Handlers.add("Credit-Notice",
-    function(msg) return msg.Action == "Credit-Notice" end,
-    function(msg)
-        -- Validate source is authorized token process
-        assert(msg.From == TokenProcess, "Unauthorized token source")
+### Purpose
+Manages the actual staking mechanics including vault creation, FIFO unstaking, and slashing.
 
-        local sender = msg.Tags.Sender
-        local amount = tonumber(msg.Tags.Quantity)
-        local lock_duration = tonumber(msg.Tags["Lock-Duration"]) or DEFAULT_LOCK
+### Data Structures
 
-        -- Create new stake vault (non-fungible)
-        local stake_id = generate_stake_id()
-        local stake = {
-            id = stake_id,
-            amount = amount,
-            lock_duration = lock_duration,
-            stake_timestamp = msg.Timestamp
-        }
+**Stakes Registry**: Maps addresses to arrays of stake vaults. Each vault contains:
+- Unique identifier
+- Staked amount
+- Lock duration (milliseconds)
+- Stake timestamp
 
-        -- Initialize user's stake array if needed
-        if not Stakes[sender] then
-            Stakes[sender] = {}
-        end
+**Unstaking Registry (Dual-Indexed)**:
+- **By Address**: Quick lookup of user's pending unstakes
+- **By Release Time**: Enables efficient batch processing of matured unstakes
 
-        -- Append new stake (preserves individual vault identity)
-        table.insert(Stakes[sender], stake)
+### Handlers
 
-        -- Emit event
-        ao.send({
-            Target = sender,
-            Action = "Stake-Confirmation",
-            ["Stake-ID"] = stake_id,
-            Amount = tostring(amount),
-            ["Lock-Duration"] = tostring(lock_duration)
-        })
-    end
-)
-```
+| Handler | Trigger | Behavior |
+|---------|---------|----------|
+| `Credit-Notice` | Token deposit | Creates new vault with unique ID, records lock duration and timestamp |
+| `Unstake` | User request | Processes oldest stakes first (FIFO), creates unstaking entries with release times |
+| `Slash` | Admin action | Immediately removes stakes without cooldown (FIFO order) |
 
-### Unstake (FIFO Order)
+### FIFO Unstaking Process
 
-```lua
-Handlers.add("Unstake",
-    function(msg) return msg.Action == "Unstake" end,
-    function(msg)
-        local sender = msg.From
-        local requested_amount = tonumber(msg.Tags.Quantity)
+When a user requests unstake of X tokens:
+1. Start with oldest stake vault
+2. If vault amount ≤ remaining request: fully unstake vault, continue to next
+3. If vault amount > remaining: partially unstake, reduce vault amount
+4. Create unstaking entries with release_time = now + vault's lock_duration
+5. Add entries to both address-indexed and time-indexed registries
 
-        assert(Stakes[sender], "No stakes found")
+### Auto-Finalization Optimization
 
-        local remaining = requested_amount
-        local unstake_entries = {}
+**Problem**: Naive approach checks every unstaking entry against current time = O(users × entries)
 
-        -- FIFO: Process oldest stakes first
-        while remaining > 0 and #Stakes[sender] > 0 do
-            local oldest_stake = Stakes[sender][1]
+**Solution**: Time-indexed registry enables O(ready_entries) processing:
+1. Collect all timestamps ≤ current time
+2. Sort timestamps
+3. For each timestamp batch, create single transfer message
+4. Remove processed entries from both registries
 
-            if oldest_stake.amount <= remaining then
-                -- Fully unstake this vault
-                remaining = remaining - oldest_stake.amount
-                table.insert(unstake_entries, {
-                    id = oldest_stake.id,
-                    amount = oldest_stake.amount,
-                    release_time = msg.Timestamp + oldest_stake.lock_duration
-                })
-                table.remove(Stakes[sender], 1)  -- O(n) but necessary for FIFO
-            else
-                -- Partially unstake this vault
-                oldest_stake.amount = oldest_stake.amount - remaining
-                table.insert(unstake_entries, {
-                    id = oldest_stake.id .. "_partial",
-                    amount = remaining,
-                    release_time = msg.Timestamp + oldest_stake.lock_duration
-                })
-                remaining = 0
-            end
-        end
+This optimization is documented in commit f7b9f32 (Oct 29, 2025).
 
-        assert(remaining == 0, "Insufficient staked balance")
+## 2.4 Security: Cooldown Exploit Prevention
 
-        -- Add to unstaking registries
-        for _, entry in ipairs(unstake_entries) do
-            -- Index by user
-            if not Unstaking[sender] then
-                Unstaking[sender] = {}
-            end
-            table.insert(Unstaking[sender], entry)
+### The Attack Vector
 
-            -- Index by time (for auto_finalize optimization)
-            if not UnstakingByTime[entry.release_time] then
-                UnstakingByTime[entry.release_time] = {}
-            end
-            table.insert(UnstakingByTime[entry.release_time], {
-                address = sender,
-                id = entry.id,
-                amount = entry.amount
-            })
-        end
-    end
-)
-```
+With fungible staking:
+1. User stakes 1000 tokens at T=0
+2. At T=23h, user requests unstake (starts 24h cooldown)
+3. At T=23h, user stakes another 1000 tokens
+4. At T=47h, first 1000 is released
+5. User repeats indefinitely, always having liquid tokens despite "locking"
 
-## 2.4 Security: Non-Fungible Stake Vaults
+### The Defense
 
-### Problem: Cooldown Exploit
+Non-fungible vaults with FIFO ordering:
+- Each stake is a separate vault with its own lock duration
+- Unstaking always processes oldest vaults first
+- New stakes go to the end of the queue
+- Cannot "jump ahead" with fresh tokens
 
-With fungible staking, attackers can:
-1. Stake 1000 tokens at T=0
-2. At T=23h, request unstake of 1000 tokens (starts 24h cooldown)
-3. At T=23h, stake another 1000 tokens
-4. At T=47h, withdraw first 1000 (cooldown complete)
-5. Repeat - effectively bypassing cooldown by rotating tokens
-
-### Solution: Non-Fungible Vaults
-
-```lua
--- Each stake is tracked individually with its own lock_duration
--- Unstaking follows FIFO order from OLDEST stakes
--- Cannot "jump the queue" with new stakes
-
--- Commit: 50b6579 (Oct 29, 2025)
--- "security: implement non-fungible stake vaults to prevent cooldown exploit"
-```
-
-## 2.5 Auto-Finalization (Time-Indexed Optimization)
-
-### O(n²) → O(n) Optimization
-
-```lua
--- OLD: Check every unstaking entry against current time
-function auto_finalize_old(current_time)
-    for address, entries in pairs(Unstaking) do
-        for i, entry in ipairs(entries) do
-            if entry.release_time <= current_time then
-                -- Process withdrawal
-            end
-        end
-    end
-end
--- Complexity: O(users × entries_per_user)
-
--- NEW: Use time-indexed registry
-function auto_finalize(current_time)
-    -- Get all timestamps up to current time
-    local ready_times = {}
-    for timestamp, _ in pairs(UnstakingByTime) do
-        if timestamp <= current_time then
-            table.insert(ready_times, timestamp)
-        end
-    end
-
-    -- Sort and process in order
-    table.sort(ready_times)
-
-    for _, timestamp in ipairs(ready_times) do
-        local entries = UnstakingByTime[timestamp]
-
-        -- Batch transfer to token process
-        local batch = {}
-        for _, entry in ipairs(entries) do
-            table.insert(batch, {
-                Recipient = entry.address,
-                Quantity = tostring(entry.amount)
-            })
-
-            -- Remove from user's unstaking list
-            remove_unstaking_entry(entry.address, entry.id)
-        end
-
-        -- Single batched transfer message
-        ao.send({
-            Target = TokenProcess,
-            Action = "Batch-Transfer",
-            Transfers = json.encode(batch)
-        })
-
-        -- Remove processed timestamp
-        UnstakingByTime[timestamp] = nil
-    end
-end
--- Complexity: O(ready_entries) - only processes matured entries
-
--- Commit: f7b9f32 (Oct 29, 2025)
--- "performance: optimize auto_finalize with time-based index"
-```
-
-## 2.6 Slashing Mechanism
-
-```lua
-Handlers.add("Slash",
-    function(msg) return msg.Action == "Slash" end,
-    function(msg)
-        -- Admin-only operation
-        assert(msg.From == Admin, "Unauthorized: Admin only")
-
-        local target = msg.Tags.Target
-        local slash_amount = tonumber(msg.Tags.Quantity)
-
-        assert(Stakes[target], "Target has no stakes")
-
-        -- Calculate total staked
-        local total_staked = 0
-        for _, stake in ipairs(Stakes[target]) do
-            total_staked = total_staked + stake.amount
-        end
-
-        assert(slash_amount <= total_staked, "Slash exceeds staked amount")
-
-        -- Remove stakes FIFO (same as unstake but no cooldown)
-        local remaining = slash_amount
-        while remaining > 0 do
-            local oldest = Stakes[target][1]
-            if oldest.amount <= remaining then
-                remaining = remaining - oldest.amount
-                table.remove(Stakes[target], 1)
-            else
-                oldest.amount = oldest.amount - remaining
-                remaining = 0
-            end
-        end
-
-        -- Emit slash event
-        ao.send({
-            Target = target,
-            Action = "Slashed",
-            Quantity = tostring(slash_amount),
-            Reason = msg.Tags.Reason or "Violation"
-        })
-    end
-)
-```
+This security measure is documented in commit 50b6579 (Oct 29, 2025).
 
 ---
 
@@ -563,484 +250,214 @@ Handlers.add("Slash",
 
 ## 3.1 Overview
 
-Streaming Token Distributions enable real-time, on-demand minting using the POT (Proof of Token) model - tokens are only minted when queried, eliminating computational overhead.
+Streaming Token Distributions enable real-time, on-demand minting using the POT (Proof of Token) model. Instead of continuously computing token distributions, the system calculates yields only when queried, reducing computational overhead to zero between queries.
 
-**Branches**: `feat/mint`, `expr/pot`, `feat/mint-indexes`, `ex/subledger-payments`
+**Related Branches**: `feat/mint`, `expr/pot`, `feat/mint-indexes`, `ex/subledger-payments`
 
-## 3.2 POT Device: Chi-Proportional Accumulation
+## 3.2 POT Device: pot@1.0
 
-### Core Mathematical Model
+### Purpose
+Implements chi-proportional accumulation minting where a global "chi" value tracks cumulative yield per deposited unit.
 
-```
-Let:
-  χ (chi)     = cumulative yield per resource unit
-  χ₀          = chi value at time of deposit
-  D           = deposit amount
-  B           = current balance
-  M           = minted tokens
-  S           = total supply
-  R           = remaining mintable (cap - minted)
-  p           = mint proportion per time-step
-  t           = time steps elapsed
+### Exported Interface
 
-Formulas:
-  1. Units minted in period:
-     M = R × (1 - (1-p)^t)
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `drip` | `drip(State, Req, Opts) → {ok, NewState}` | Calculates and applies pending yield |
 
-  2. Yield per resource unit:
-     Δχ = M / TotalDeposits
+### State Schema
 
-  3. User balance at time T:
-     B = ExistingBalance + (χ_current - χ₀) × D
-```
+| Key | Type | Description |
+|-----|------|-------------|
+| `t` | integer | Current time (block height or timestamp) |
+| `last-drip` | integer | Time of last calculation |
+| `chi` | float | Cumulative yield per deposited unit |
+| `mint-cap` | integer | Maximum total supply |
+| `mint-prop` | float | Proportion minted per time-step (e.g., 0.0001 = 0.01%) |
+| `minted` | integer | Total tokens minted to date |
+| `resources` | map | Resource pools with weights, deposits, and per-resource chi |
+| `balances` | map | Credited (realized) balances by address |
 
-### Implementation
+### Mathematical Model
 
-```erlang
-%% Module: dev_pot.erl
--export([drip/3]).
+**Exponential Decay Minting**
 
-%% Core drip function - calculates yield on-demand
-drip(State, Req, Opts) ->
-    %% Get timing parameters
-    LastDrip = hb_ao:get(<<"last-drip">>, State, 0, Opts),
-    CurrentTime = hb_ao:get(<<"timestamp">>, Req, erlang:system_time(millisecond), Opts),
-    TimeSteps = (CurrentTime - LastDrip) div StepDuration,
+The minting formula creates diminishing returns over time:
 
-    case TimeSteps > 0 of
-        false -> {ok, State};  %% No time elapsed
-        true ->
-            %% Calculate minting
-            Remaining = MintCap - hb_ao:get(<<"minted">>, State, 0, Opts),
-            Proportion = hb_ao:get(<<"mint-prop">>, State, Opts),
+`TokensMinted = Remaining × (1 - (1-Proportion)^Steps)`
 
-            UnitsMinted = units_minted_between(Remaining, Proportion, TimeSteps),
+Where:
+- `Remaining` = mint-cap minus already minted
+- `Proportion` = mint-prop (e.g., 0.0001)
+- `Steps` = time elapsed since last drip
 
-            %% Update chi
-            TotalDeposits = calculate_total_deposits(State, Opts),
-            ChiDelta = case TotalDeposits of
-                0 -> 0;
-                _ -> UnitsMinted div TotalDeposits
-            end,
+**Chi Accumulation**
 
-            CurrentChi = hb_ao:get(<<"chi">>, State, 0, Opts),
-            NewChi = CurrentChi + ChiDelta,
+When tokens are minted, chi increases proportionally:
 
-            %% Update state
-            NewState = State#{
-                <<"chi">> => NewChi,
-                <<"minted">> => hb_ao:get(<<"minted">>, State, 0, Opts) + UnitsMinted,
-                <<"last-drip">> => CurrentTime
-            },
+`ΔChi = TokensMinted / TotalDeposits`
 
-            {ok, NewState}
-    end.
+This means each deposited unit "earns" an equal share of newly minted tokens.
 
-%% Exponential decay minting formula
-units_minted_between(Remaining, Proportion, Steps) ->
-    %% M = R × (1 - (1-p)^t)
-    %% Using integer arithmetic for precision
-    Factor = math:pow(1 - Proportion, Steps),
-    Minted = Remaining * (1 - Factor),
-    trunc(Minted).
-```
+**Balance Calculation**
 
-### Balance Calculation
+User balance combines credited balance with unrealized yield:
 
-```erlang
-%% Get user balance with accrued yield
-get_balance(Address, State, Opts) ->
-    Deposit = hb_ao:get([<<"deposits">>, Address], State, #{}, Opts),
+`Balance = CreditedBalance + (CurrentChi - Chi0) × DepositAmount`
 
-    case Deposit of
-        #{} -> 0;  %% No deposit
-        #{<<"amount">> := Amount, <<"chi0">> := Chi0} ->
-            ExistingBalance = hb_ao:get([<<"balances">>, Address], State, 0, Opts),
-            CurrentChi = hb_ao:get(<<"chi">>, State, 0, Opts),
+Where Chi0 is the chi value when the user made their deposit.
 
-            %% B = Existing + (χ_current - χ₀) × D
-            AccruedYield = (CurrentChi - Chi0) * Amount,
-            ExistingBalance + AccruedYield
-    end.
-```
+### Drip Behavior
 
-### Deposit Management
+1. Check if time has elapsed since `last-drip`
+2. If no time elapsed, return state unchanged (zero computation)
+3. Calculate tokens to mint using exponential decay formula
+4. Compute chi increment based on total deposits
+5. Update state with new chi, minted total, and last-drip timestamp
+6. User balances are NOT updated - they're calculated on-demand
 
-```erlang
-%% Modify deposit with yield accrual
-modify_deposit(Address, DeltaAmount, State, Req, Opts) ->
-    %% 1. First accrue any pending yield
-    {ok, StateAfterDrip} = drip(State, Req, Opts),
+### Deposit Modification
 
-    %% 2. Get current deposit
-    CurrentDeposit = hb_ao:get([<<"deposits">>, Address], StateAfterDrip,
-        #{<<"amount">> => 0, <<"chi0">> => 0}, Opts),
+When a user changes their deposit:
+1. First execute drip to capture pending yield
+2. Calculate user's current balance (including unrealized yield)
+3. Credit the yield to user's balance
+4. Update deposit amount
+5. Reset user's chi0 to current chi (fresh accrual starting point)
 
-    CurrentAmount = maps:get(<<"amount">>, CurrentDeposit),
-    CurrentChi0 = maps:get(<<"chi0">>, CurrentDeposit),
+## 3.3 Mint Device: mint@1.0
 
-    %% 3. Calculate and credit accrued yield
-    CurrentChi = hb_ao:get(<<"chi">>, StateAfterDrip, 0, Opts),
-    AccruedYield = (CurrentChi - CurrentChi0) * CurrentAmount,
+### Purpose
+Orchestrates cycle-based minting with security enforcement.
 
-    ExistingBalance = hb_ao:get([<<"balances">>, Address], StateAfterDrip, 0, Opts),
-    NewBalance = ExistingBalance + AccruedYield,
+### Exported Interface
 
-    %% 4. Update deposit with new chi0
-    NewAmount = CurrentAmount + DeltaAmount,
-    NewDeposit = #{
-        <<"amount">> => NewAmount,
-        <<"chi0">> => CurrentChi  %% Reset chi0 to current
-    },
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `compute` | `compute(State, Req, Opts) → {ok, NewState}` | Execute minting with security |
 
-    %% 5. Update state
-    NewState = StateAfterDrip#{
-        <<"deposits">> => maps:put(Address, NewDeposit,
-            hb_ao:get(<<"deposits">>, StateAfterDrip, #{}, Opts)),
-        <<"balances">> => maps:put(Address, NewBalance,
-            hb_ao:get(<<"balances">>, StateAfterDrip, #{}, Opts))
-    },
+### Behavior
 
-    {ok, NewState}.
-```
+1. Delegates to `security@1.0` device for authorization check
+2. Queries `dev_mint_math:should_mint/3` to determine if cycle needed
+3. If yes, executes `dev_mint_math:mint/3`
+4. Recursively checks for additional cycles until stable
 
-## 3.3 Mint v3 Flow (feat/mint)
+### Related Module: dev_mint_math.erl
 
-### Precision-Safe Distribution Mathematics
+| Function | Description |
+|----------|-------------|
+| `should_mint/3` | Returns boolean indicating if minting cycle should execute |
+| `mint/3` | Executes one minting cycle, distributes to holders |
 
-```erlang
-%% Module: dev_mint_math.erl
+### Precision Protection
 
-%% CRITICAL: Multiplication BEFORE division to prevent precision loss
-distribute_to_holder(TotalUnits, HolderQuantity, TotalQuantity) ->
-    %% WRONG: (TotalUnits div TotalQuantity) * HolderQuantity
-    %%        Could round to 0 if TotalUnits < TotalQuantity
+All calculations use multiplication before division to prevent precision loss:
+- **Wrong**: `(Total / Count) × Share` - may round to zero
+- **Correct**: `(Total × Share) / Count` - preserves precision
 
-    %% CORRECT: Multiply first, then divide
-    (TotalUnits * HolderQuantity) div TotalQuantity.
+This fix is documented in commit e9892f0 (Nov 3, 2025).
 
-%% Commit: e9892f0 (Nov 3, 2025)
-%% "fix: prevent precision loss in proportional token distribution"
-```
+## 3.4 Token Device: token@1.0
 
-### Multi-Resource Weighted Distribution
+### Purpose
+High-performance token implementation using trie-based balance storage.
 
-```erlang
-%% Distribute across multiple resource types with weights
-distribute_cycle(State, CycleSupply, Opts) ->
-    Resources = hb_ao:get(<<"resources">>, State, Opts),
-    TotalWeight = lists:foldl(fun(R, Acc) ->
-        Acc + hb_ao:get(<<"weight">>, R, 1, Opts)
-    end, 0, Resources),
+### Exported Interface
 
-    %% Allocate to each resource proportionally
-    lists:foldl(fun(Resource, AccState) ->
-        Weight = hb_ao:get(<<"weight">>, Resource, 1, Opts),
-        ResourceID = hb_ao:get(<<"id">>, Resource, Opts),
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `compute` | `compute(State, Req, Opts) → {ok, NewState}` | Route to action handler |
 
-        %% Units for this resource (multiplication first!)
-        UnitsForResource = (CycleSupply * Weight) div TotalWeight,
+### Actions
 
-        %% Distribute to holders of this resource
-        distribute_to_resource_holders(ResourceID, UnitsForResource, AccState, Opts)
-    end, State, Resources).
-```
+| Action | Parameters | Description |
+|--------|------------|-------------|
+| `Transfer` | recipient, quantity | Move tokens between addresses |
+| `Mint` | recipient, quantity (or quantities map) | Create new tokens (authority required) |
+| `Balance` | target | Query single address balance |
+| `Balances` | (none) | Query all balances |
 
-### Dust Tracking
+### State Schema
 
-```erlang
-%% Track unallocated units due to rounding
-track_dust(Allocated, Total, State, Opts) ->
-    Dust = Total - Allocated,
-    CurrentDust = hb_ao:get(<<"dust">>, State, 0, Opts),
-    State#{<<"dust">> => CurrentDust + Dust}.
+| Key | Type | Description |
+|-----|------|-------------|
+| `balances` | trie | Address-to-balance mapping via trie@1.0 |
+| `mint-authority` | address | Only this address can mint |
+| `total-supply` | integer | Current circulating supply |
 
-%% Periodically redistribute dust
-redistribute_dust(State, Opts) ->
-    Dust = hb_ao:get(<<"dust">>, State, 0, Opts),
-    case Dust > MinDustThreshold of
-        true ->
-            %% Add dust to next cycle's supply
-            State#{
-                <<"dust">> => 0,
-                <<"pending-supply">> => Dust
-            };
-        false ->
-            State
-    end.
-```
+### Transfer Flow
 
-## 3.4 Token Device (feat/token-device)
+1. Extract sender (from message signer), recipient, and quantity
+2. Retrieve both balances from trie
+3. Validate: balances are integers, quantity ≥ 0, sender has sufficient balance
+4. Update both balances in trie
+5. Generate Credit-Notice (to recipient) and Debit-Notice (to sender) in outbox
 
-### Fast Transfer Implementation
+### Mint Flow
 
-```erlang
-%% Module: dev_token.erl
--export([transfer/3, mint/3, balance/3, info/3]).
+1. Verify requester is the mint-authority
+2. For single mint: update recipient balance and total supply
+3. For batch mint: iterate quantities map, update each recipient
 
-transfer(State, Req, Opts) ->
-    %% Extract parameters
-    From = extract_sender(Req, Opts),
-    Recipient = hb_ao:get(<<"recipient">>, Req, Opts),
-    Quantity = hb_util:int(hb_ao:get(<<"quantity">>, Req, Opts)),
+### Performance
 
-    %% Validation
-    case Quantity >= 0 of
-        false -> {error, <<"Invalid quantity">>};
-        true ->
-            FromBalance = get_balance(From, State, Opts),
-            case FromBalance >= Quantity of
-                false ->
-                    {error, #{
-                        <<"reason">> => <<"Insufficient balance">>,
-                        <<"balance">> => FromBalance,
-                        <<"requested">> => Quantity
-                    }};
-                true ->
-                    %% Update balances via trie
-                    State1 = update_balance(From, -Quantity, State, Opts),
-                    State2 = update_balance(Recipient, Quantity, State1, Opts),
+Benchmarked November 5, 2025:
+- Sequential transfers: 17ms average
+- Batch distribution: 0.065ms per recipient
+- 15x improvement for batch vs sequential operations
 
-                    %% Generate notices
-                    Notices = [
-                        #{
-                            <<"target">> => From,
-                            <<"action">> => <<"Debit-Notice">>,
-                            <<"quantity">> => Quantity,
-                            <<"recipient">> => Recipient
-                        },
-                        #{
-                            <<"target">> => Recipient,
-                            <<"action">> => <<"Credit-Notice">>,
-                            <<"quantity">> => Quantity,
-                            <<"sender">> => From
-                        }
-                    ],
+## 3.5 HyperTokens: Peer Ledger System
 
-                    {ok, State2#{<<"outbox">> => Notices}}
-            end
-    end.
-```
+### Purpose
+Enables cross-ledger transfers between related token processes.
 
-### Mint with Authority Checking
-
-```erlang
-mint(State, Req, Opts) ->
-    %% Enforce mint authority
-    Requester = hb_message:signers(Req, Opts),
-    Authority = hb_ao:get(<<"mint-authority">>, State, Opts),
-
-    case lists:member(Authority, Requester) of
-        false ->
-            {error, <<"Mint authority mismatch">>};
-        true ->
-            Recipient = hb_ao:get(<<"recipient">>, Req, Opts),
-            Quantity = hb_util:int(hb_ao:get(<<"quantity">>, Req, Opts)),
-
-            %% Update balance and total supply
-            State1 = update_balance(Recipient, Quantity, State, Opts),
-            CurrentSupply = hb_ao:get(<<"total-supply">>, State, 0, Opts),
-            State2 = State1#{<<"total-supply">> => CurrentSupply + Quantity},
-
-            {ok, State2}
-    end.
-
-%% Commit: Nov 5, 2025
-%% "feat: implement secure_set action with authority checking"
-```
-
-### Benchmarks
-
-```
-%% Performance Results (Nov 5, 2025):
-%% - 100 sequential transfers: 1.7 seconds
-%% - 10,000 recipient batch distribution: 655 milliseconds
-%% - Average: 17ms per transfer, 0.0655ms per recipient in batch
-
-%% Commit: "fix: enabled benchmarks - 100 transfers in 1.7s, 10k recipients in 655ms"
-```
-
-## 3.5 HyperTokens: Peer Ledger System (ex/subledger-payments)
+**Branch**: `ex/subledger-payments`
 
 ### Architecture
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    ROOT TOKEN LEDGER                     │
-│  - No parent token reference                            │
-│  - Authoritative source of truth                        │
-│  - Rejects Credit-Notice (receives only via Transfer)   │
-└─────────────────────────┬───────────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│  SUB-LEDGER A │ │  SUB-LEDGER B │ │  SUB-LEDGER C │
-│  token = ROOT │ │  token = ROOT │ │  token = ROOT │
-│  Accepts      │ │  Accepts      │ │  Accepts      │
-│  Credit-Notice│ │  Credit-Notice│ │  Credit-Notice│
-└───────────────┘ └───────────────┘ └───────────────┘
-```
+**Root Ledger**: No parent token reference, authoritative source of truth, rejects Credit-Notice messages.
+
+**Sub-Ledgers**: Reference a parent token, accept Credit-Notice from registered peers, can transfer to other sub-ledgers.
+
+### New Handlers
+
+| Handler | Trigger | Description |
+|---------|---------|-------------|
+| `Register` | Peer request | Stores peer's security parameters, sends reciprocal registration |
+| `Register-Remote` | Response | Completes bidirectional peer relationship |
+| `Transfer` | User request | Handles same-ledger, peer, and routed transfers |
+| `Credit-Notice` | Peer transfer | Validates peer and credits recipient (sub-ledgers only) |
 
 ### Peer Registration
 
-```lua
--- Bidirectional peer registration
-Handlers.add("Register",
-    function(msg) return msg.Action == "Register" end,
-    function(msg)
-        local peer_id = msg.From
-        local peer_base = msg.Tags["From-Base"]
-        local peer_authority = msg.Tags["From-Authority"]
-        local peer_scheduler = msg.Tags["From-Scheduler"]
+When Ledger A wants to establish trust with Ledger B:
+1. A sends Register to B with From-Base, From-Authority, From-Scheduler
+2. B stores A's parameters and sends Register-Remote back
+3. A stores B's parameters
+4. Both can now validate transfers from each other
 
-        -- Store peer information for validation
-        Peers[peer_id] = {
-            base = peer_base,
-            authority = peer_authority,
-            scheduler = peer_scheduler,
-            registered_at = msg.Timestamp
-        }
+### Transfer Modes
 
-        -- Send reciprocal registration
-        ao.send({
-            Target = peer_id,
-            Action = "Register-Remote",
-            ["From-Base"] = ao.env.Process.Id,
-            ["From-Authority"] = Authority,
-            ["From-Scheduler"] = Scheduler
-        })
-    end
-)
-```
+| Mode | Condition | Behavior |
+|------|-----------|----------|
+| Same-ledger | Recipient is local address | Direct balance update |
+| Peer transfer | Recipient is registered peer | Send Credit-Notice with security fields |
+| Routed transfer | Route parameter provided | Multi-hop through peer chain |
 
-### Cross-Ledger Transfer
+### Security Validation (Three Tiers)
 
-```lua
-Handlers.add("Transfer",
-    function(msg) return msg.Action == "Transfer" end,
-    function(msg)
-        local sender = msg.From
-        local recipient = msg.Tags.Recipient
-        local quantity = normalize_int(msg.Tags.Quantity)
-        local route = msg.Tags.Route  -- Optional routing path
+| Tier | What's Validated |
+|------|------------------|
+| Assignment | Message's scheduler matches process's scheduler constraint |
+| Authority | Message's authority matches process's authority constraint |
+| Peer | Credit-Notice sender is registered peer with matching security parameters |
 
-        -- Validate balance
-        assert(Balances[sender] >= quantity, "Insufficient balance")
+### Multisig Support
 
-        if route then
-            -- Routed transfer through peer ledgers
-            local next_hop = parse_next_hop(route)
-            assert(Peers[next_hop], "Unknown peer in route")
+Scheduler and authority fields can contain comma-separated lists. Validation succeeds if any provided value matches any required value.
 
-            -- Debit sender
-            Balances[sender] = Balances[sender] - quantity
-
-            -- Send to next hop with remaining route
-            ao.send({
-                Target = next_hop,
-                Action = "Credit-Notice",
-                Sender = sender,
-                Quantity = tostring(quantity),
-                Recipient = recipient,
-                Route = remaining_route(route),
-                -- Security fields for validation
-                ["From-Base"] = ao.env.Process.Id,
-                ["From-Authority"] = Authority,
-                ["From-Scheduler"] = Scheduler
-            })
-        else
-            -- Direct transfer (same ledger or to registered peer)
-            if is_local_address(recipient) then
-                -- Same ledger transfer
-                Balances[sender] = Balances[sender] - quantity
-                Balances[recipient] = (Balances[recipient] or 0) + quantity
-            else
-                -- Transfer to peer ledger
-                assert(Peers[recipient], "Recipient not a registered peer")
-                Balances[sender] = Balances[sender] - quantity
-                ao.send({
-                    Target = recipient,
-                    Action = "Credit-Notice",
-                    Sender = sender,
-                    Quantity = tostring(quantity),
-                    ["From-Base"] = ao.env.Process.Id,
-                    ["From-Authority"] = Authority,
-                    ["From-Scheduler"] = Scheduler
-                })
-            end
-        end
-    end
-)
-```
-
-### Security Validation
-
-```lua
--- Three-tier validation for incoming messages
-function validate_message(msg)
-    -- Tier 1: Assignment validation
-    local assignment_valid = (
-        msg.Tags["From-Scheduler"] == nil or
-        satisfies_list_constraints(msg.Tags["From-Scheduler"],
-            ao.env.Process.Tags["Scheduler"])
-    )
-
-    -- Tier 2: Request authorization
-    local authority_valid = (
-        msg.Tags["From-Authority"] == nil or
-        satisfies_list_constraints(msg.Tags["From-Authority"],
-            ao.env.Process.Tags["Authority"])
-    )
-
-    -- Tier 3: Peer ledger validation (for Credit-Notice)
-    local peer_valid = true
-    if msg.Action == "Credit-Notice" then
-        peer_valid = is_from_trusted_peer(msg)
-    end
-
-    return assignment_valid and authority_valid and peer_valid
-end
-
-function is_from_trusted_peer(msg)
-    local peer = Peers[msg.From]
-    if not peer then return false end
-
-    return (
-        msg.Tags["From-Base"] == peer.base and
-        msg.Tags["From-Authority"] == peer.authority and
-        msg.Tags["From-Scheduler"] == peer.scheduler
-    )
-end
-
--- Commit: 19d7f70 (May 14, 2025)
--- "feat: support complex authority and scheduler matching in hyper-token"
-```
-
-### Multisig Scheduler Support
-
-```lua
--- Support multiple scheduler signatures
-function satisfies_list_constraints(provided, required)
-    if type(required) == "string" then
-        required = split_by_comma(required)
-    end
-    if type(provided) == "string" then
-        provided = split_by_comma(provided)
-    end
-
-    -- Check if any provided value matches any required value
-    for _, p in ipairs(provided) do
-        for _, r in ipairs(required) do
-            if p == r then return true end
-        end
-    end
-    return false
-end
-
--- Commit: f0ab0e1 (May 14, 2025)
--- "feat: support multisignature requests for schedulers"
-```
+Documented in commit f0ab0e1 (May 14, 2025).
 
 ---
 
@@ -1048,563 +465,195 @@ end
 
 ## 4.1 Overview
 
-AO-Core 1.5 introduces a message type system with BEAM file parsing, enabling type-aware routing, validation, and remote device loading with trust verification.
+AO-Core 1.5 introduces a message type system enabling type-aware routing, validation, and remote device loading with cryptographic trust verification.
 
 **Branch**: `expr/1.5`
 
 ## 4.2 Message-to-Function Resolution
 
-```erlang
-%% Module: hb_ao_device.erl
+### Resolution Hierarchy
 
-%% Hierarchical function lookup
-message_to_fun(Key, Device, Opts) ->
-    %% Resolution order:
-    %% 1. Device specification or default device
-    %% 2. Handler functions with override capability
-    %% 3. Direct function exports
-    %% 4. Default handlers
-    %% 5. Fallback device references
-    %% 6. Global defaults
+When resolving a key to a function, the system checks in order:
+1. Device specification or default device selection
+2. Handler functions with override capability
+3. Direct function exports from module
+4. Default handlers defined by device
+5. Fallback device references
+6. Global defaults
 
-    case find_handler(Key, Device, Opts) of
-        {ok, Handler} -> {ok, Handler};
-        not_found ->
-            case find_exported_function(Key, Device, Opts) of
-                {ok, Fun} -> {ok, Fun};
-                not_found ->
-                    case find_default_handler(Key, Device, Opts) of
-                        {ok, Default} -> {ok, Default};
-                        not_found ->
-                            case find_fallback_device(Device, Opts) of
-                                {ok, Fallback} ->
-                                    message_to_fun(Key, Fallback, Opts);
-                                not_found ->
-                                    {error, {no_handler, Key, Device}}
-                            end
-                    end
-            end
-    end.
-```
+### Device Loading
+
+The system supports three device input types:
+- **Maps**: Returned directly as device definitions
+- **Atoms**: Validated via module_info, must be loaded module
+- **Binary IDs**: Trigger remote loading with trust verification
 
 ## 4.3 Remote Device Loading
 
-```erlang
-%% Load device from message ID with trust verification
-load(DeviceID, Opts) when is_binary(DeviceID) ->
-    %% Check if remote loading is enabled
-    case hb_opts:get(load_remote_devices, false, Opts) of
-        false ->
-            {error, remote_device_loading_disabled};
-        true ->
-            %% Fetch device from cache/network
-            case hb_cache:read(DeviceID, Opts) of
-                {ok, DeviceMsg} ->
-                    %% Verify content type
-                    case hb_ao:get(<<"content-type">>, DeviceMsg, Opts) of
-                        <<"application/beam">> ->
-                            %% Verify trust
-                            verify_and_load_beam(DeviceMsg, Opts);
-                        Other ->
-                            {error, {invalid_content_type, Other}}
-                    end;
-                not_found ->
-                    {error, {device_not_found, DeviceID}}
-            end
-    end.
+### Requirements
 
-%% Trust verification
-verify_and_load_beam(DeviceMsg, Opts) ->
-    Signers = hb_message:signers(DeviceMsg, Opts),
-    TrustedSigners = hb_opts:get(trusted_device_signers, [], Opts),
+Remote device loading requires:
+- `load_remote_devices: true` in options
+- Device message has `application/beam` content-type
+- At least one signer is in `trusted_device_signers` list
+- Device passes compatibility verification
 
-    %% Check if any signer is trusted
-    Trusted = lists:any(fun(Signer) ->
-        lists:member(Signer, TrustedSigners)
-    end, Signers),
+### Trust Verification
 
-    case Trusted of
-        false ->
-            {error, {untrusted_device_signer, Signers}};
-        true ->
-            %% Verify compatibility
-            case verify_compatibility(DeviceMsg, Opts) of
-                ok ->
-                    %% Load BEAM binary
-                    BeamBinary = hb_ao:get(<<"body">>, DeviceMsg, Opts),
-                    load_beam_binary(BeamBinary, Opts);
-                {error, Reason} ->
-                    {error, {incompatible_device, Reason}}
-            end
-    end.
-```
+1. Fetch device message from cache/network
+2. Extract message signers
+3. Check if any signer is in trusted list
+4. If trusted, proceed to compatibility check
+5. If untrusted, return error with signer details
+
+### Compatibility Verification
+
+Device metadata can specify requirements using `requires-*` prefixes:
+- `requires-otp-version`: Minimum OTP release
+- `requires-erts-version`: Minimum ERTS version
+- `requires-hb-version`: Minimum HyperBEAM version
+
+System compares requirements against `erlang:system_info/1` values, returning detailed mismatch information on failure.
 
 ## 4.4 BEAM File Parsing
 
-```erlang
-%% Parse BEAM file for type information
-parse_beam_types(BeamBinary) ->
-    %% Extract chunks from BEAM file
-    {ok, {Module, Chunks}} = beam_lib:chunks(BeamBinary, [
-        abstract_code,
-        attributes,
-        exports
-    ]),
+### Purpose
+Extracts type specifications from compiled BEAM files for runtime validation.
 
-    %% Extract type specifications
-    Types = case proplists:get_value(abstract_code, Chunks) of
-        {raw_abstract_v1, Forms} ->
-            extract_type_specs(Forms);
-        no_abstract_code ->
-            []
-    end,
+### Extracted Information
 
-    %% Extract exported functions
-    Exports = proplists:get_value(exports, Chunks, []),
+| Data | Source |
+|------|--------|
+| Module name | BEAM header |
+| Type specifications | abstract_code chunk (-spec declarations) |
+| Exported functions | exports chunk |
+| Custom attributes | attributes chunk |
 
-    %% Extract custom attributes
-    Attributes = proplists:get_value(attributes, Chunks, []),
+### Type Specification Format
 
-    #{
-        module => Module,
-        types => Types,
-        exports => Exports,
-        attributes => Attributes
-    }.
+Each -spec declaration is parsed into:
+- Function name
+- Arity
+- Type specifications (argument types, return type)
 
-%% Extract -spec declarations
-extract_type_specs(Forms) ->
-    lists:filtermap(fun
-        ({attribute, _, spec, {{Name, Arity}, TypeSpecs}}) ->
-            {true, {Name, Arity, TypeSpecs}};
-        (_) ->
-            false
-    end, Forms).
-```
+## 4.5 Export Control
 
-## 4.5 Compatibility Verification
+### Mechanism
 
-```erlang
-%% Verify device compatibility with system
-verify_compatibility(DeviceMsg, Opts) ->
-    %% Extract requirements from device metadata
-    Info = hb_ao:get(<<"info">>, DeviceMsg, #{}, Opts),
-    Requirements = maps:filter(fun(Key, _) ->
-        binary:match(Key, <<"requires-">>) =/= nomatch
-    end, Info),
+Devices control which functions are externally accessible through info/0 metadata:
 
-    %% Check each requirement
-    Results = maps:map(fun(Key, Required) ->
-        %% Extract property name (remove "requires-" prefix)
-        PropName = binary:replace(Key, <<"requires-">>, <<>>),
+| Field | Type | Description |
+|-------|------|-------------|
+| `exports` | list or `all` | Whitelist of allowed functions |
+| `excludes` | list | Blacklist of forbidden functions |
 
-        %% Get system value
-        SystemValue = case PropName of
-            <<"otp-version">> ->
-                list_to_binary(erlang:system_info(otp_release));
-            <<"erts-version">> ->
-                list_to_binary(erlang:system_info(version));
-            <<"hb-version">> ->
-                hb:version();
-            Other ->
-                erlang:system_info(binary_to_atom(Other))
-        end,
+### Rules
 
-        %% Compare
-        case SystemValue of
-            Required -> ok;
-            _ -> {mismatch, Required, SystemValue}
-        end
-    end, Requirements),
+1. The `info` function is always exported if it exists
+2. Excludes list takes precedence over exports
+3. If exports is `all`, everything except excludes is allowed
+4. If exports is a list, only those functions are allowed
 
-    %% Check for any mismatches
-    Failures = maps:filter(fun(_, V) -> V =/= ok end, Results),
-    case maps:size(Failures) of
-        0 -> ok;
-        _ -> {error, {requirements_not_met, Failures}}
-    end.
-```
+## 4.6 Type-Aware Routing
 
-## 4.6 Export Control
+### Mechanism
 
-```erlang
-%% Check if function is exported by device
-is_exported(Key, Device, Opts) ->
-    is_exported(Key, Device, default, Opts).
+Messages can specify a `type` field. The process state can contain `type-handlers` mapping types to handler devices.
 
-is_exported(Key, Device, Arity, Opts) ->
-    %% info function is always exported if it exists
-    case Key of
-        <<"info">> -> true;
-        _ ->
-            Info = device_info(Device, Opts),
-            Excludes = maps:get(excludes, Info, []),
-            Exports = maps:get(exports, Info, all),
+### Flow
 
-            %% Check excludes list first
-            case lists:member(Key, Excludes) of
-                true -> false;
-                false ->
-                    %% Check exports list
-                    case Exports of
-                        all -> true;
-                        List when is_list(List) ->
-                            lists:member(Key, List) orelse
-                            lists:member({Key, Arity}, List)
-                    end
-            end
-    end.
-```
+1. Extract message type (default: "Message")
+2. Look up type-specific handler in state
+3. If no handler, use default routing
+4. If handler exists, validate message against type schema
+5. Route to type-specific handler if valid
 
-## 4.7 Type-Aware Routing
+### Schema Validation
 
-```erlang
-%% Route message based on type
-route_by_type(Msg, State, Opts) ->
-    %% Extract message type
-    MsgType = hb_ao:get(<<"type">>, Msg, <<"Message">>, Opts),
-
-    %% Get type handlers from state
-    TypeHandlers = hb_ao:get(<<"type-handlers">>, State, #{}, Opts),
-
-    case maps:get(MsgType, TypeHandlers, undefined) of
-        undefined ->
-            %% No specific handler, use default
-            route_default(Msg, State, Opts);
-        Handler ->
-            %% Validate message against type schema
-            case validate_type(Msg, MsgType, Opts) of
-                ok ->
-                    %% Route to type-specific handler
-                    hb_ao:resolve(Handler, Msg, Opts);
-                {error, ValidationErrors} ->
-                    {error, #{
-                        <<"reason">> => <<"Type validation failed">>,
-                        <<"type">> => MsgType,
-                        <<"errors">> => ValidationErrors
-                    }}
-            end
-    end.
-
-%% Validate message against type schema
-validate_type(Msg, TypeName, Opts) ->
-    %% Get type schema
-    Schema = get_type_schema(TypeName, Opts),
-
-    %% Check required fields
-    RequiredFields = maps:get(required, Schema, []),
-    MissingFields = lists:filter(fun(Field) ->
-        hb_ao:get(Field, Msg, not_found, Opts) =:= not_found
-    end, RequiredFields),
-
-    case MissingFields of
-        [] ->
-            %% Check field types
-            validate_field_types(Msg, Schema, Opts);
-        _ ->
-            {error, {missing_fields, MissingFields}}
-    end.
-```
+Type schemas can specify:
+- Required fields that must be present
+- Field types that must match
+- Custom validation rules
 
 ---
 
-# Part 5: COMPLETE DEVICE API REFERENCE
+# Part 5: CONFIGURATION REFERENCE
 
-## 5.1 Process Device (dev_process.erl)
+## 5.1 POT Device Configuration
 
-```erlang
-%% Exported Functions
--export([
-    info/1,              %% Device metadata
-    as/3,                %% Device swapping for delegation
-    compute/3,           %% State computation
-    schedule/3,          %% Message scheduling
-    slot/3,              %% Current slot query
-    now/3,               %% Latest results
-    push/3,              %% Message push
-    snapshot/3,          %% State snapshot
-    ensure_process_key/2,%% Process key normalization
-    as_process/2,        %% Convert to process format
-    process_id/3         %% Get process ID
-]).
+| Key | Type | Example | Description |
+|-----|------|---------|-------------|
+| `mint-cap` | integer | 1000000000 | Maximum total supply |
+| `mint-prop` | float | 0.0001 | Proportion per time-step (0.01%) |
+| `chi` | float | 0 | Initial cumulative yield |
+| `minted` | integer | 0 | Initial minted amount |
+| `last-drip` | integer | 0 | Initial timestamp |
 
-%% info/1 - Returns device metadata
-info(_Msg1) ->
-    #{
-        worker => fun dev_process_worker:server/3,
-        grouper => fun dev_process_worker:group/3,
-        await => fun dev_process_worker:await/5,
-        excludes => [<<"test">>, <<"init">>, ...]
-    }.
+## 5.2 LiveNet Configuration
 
-%% as/3 - Swap device for delegation
-as(RawMsg1, Msg2, Opts) ->
-    Key = get_as_key(Msg2, Opts),  %% "scheduler", "execution", etc.
-    Device = get_device_for_key(Key, Msg1, Opts),
-    {ok, Msg1#{<<"device">> => Device, <<"input-prefix">> => <<"process">>}}.
+| Key | Type | Example | Description |
+|-----|------|---------|-------------|
+| `TokenProcess` | address | "abc123..." | Token contract for stake transfers |
+| `Admin` | address | "def456..." | Administrator wallet |
+| `DEFAULT_LOCK` | integer | 86400000 | Default lock duration (24h in ms) |
 
-%% compute/3 - Execute computation
-compute(Msg1, Msg2, Opts) ->
-    case get_target_slot(Msg2, Opts) of
-        not_found -> now(Msg1, Msg2, Opts);
-        Slot -> compute_to_slot(ProcID, Msg1, Msg2, Slot, Opts)
-    end.
-```
+## 5.3 Scheduler Configuration
 
-## 5.2 Scheduler Device (dev_scheduler.erl)
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `scheduler_lookahead` | boolean | true | Enable prefetch workers |
+| `scheduler_location_notify_peers` | list | [] | Peer URLs for registration notification |
+| `scheduler_follow_hints` | boolean | false | Extract scheduler URL from process hints |
 
-```erlang
--export([
-    info/0,              %% Device metadata
-    schedule/3,          %% Route scheduling (GET/POST)
-    router/4,            %% Default handler
-    location/3,          %% Location management
-    slot/3,              %% Current slot
-    status/3,            %% Status query
-    next/3,              %% Next assignment
-    parse_schedulers/1,  %% Parse location strings
-    start/0,             %% Initialize
-    checkpoint/1         %% Persistence
-]).
-```
+## 5.4 Peer Ledger Configuration
 
-## 5.3 Push Device (dev_push.erl)
-
-```erlang
--export([push/3]).
-
-%% push/3 - Recursive message propagation
-push(Base, Req, Opts) ->
-    Process = as_process(Base, Opts),
-    case get_slot(Req, Opts) of
-        no_slot ->
-            %% Schedule and push initial message
-            {ok, Assignment} = schedule_initial_message(Process, Req, Opts),
-            push_with_mode(Process, Assignment, Opts);
-        Slot ->
-            %% Push existing slot
-            push_with_mode(Process, Req, Opts)
-    end.
-```
-
-## 5.4 Trie Device (dev_trie.erl)
-
-```erlang
--export([
-    insert/4,    %% Insert key-value
-    retrieve/3,  %% Get value by key
-    keys/2,      %% List all keys
-    remove/3,    %% Delete key
-    update/4     %% Batch update
-]).
-
-%% Radix-256 trie operations
--define(RADIX, 256).
-```
-
-## 5.5 Payment Device (dev_p4.erl)
-
-```erlang
--export([
-    request/3,   %% Pre-execution validation
-    response/3,  %% Post-execution charging
-    balance/3    %% Balance query
-]).
-```
-
-## 5.6 Simple Pay Device (dev_simple_pay.erl)
-
-```erlang
--export([
-    estimate/3,  %% Cost estimation
-    price/3,     %% Final pricing
-    charge/3,    %% Account debit
-    balance/3,   %% Balance query
-    topup/3      %% Account credit (operator only)
-]).
-```
-
-## 5.7 SNP Device (dev_snp.erl)
-
-```erlang
--export([
-    generate/3,  %% Generate attestation report
-    verify/3     %% Verify attestation report
-]).
-
-%% Verification steps:
-%% 1. verify_nonce/4
-%% 2. verify_signature_and_address/3
-%% 3. verify_debug_disabled/1
-%% 4. verify_trusted_software/3
-%% 5. verify_measurement/3
-%% 6. verify_report_integrity/1
-```
-
-## 5.8 PoDA Device (dev_poda.erl)
-
-```erlang
--export([
-    init/3,           %% Initialize
-    validate/3,       %% Validate incoming message
-    add_commitments/3 %% Add peer commitments
-]).
-```
-
-## 5.9 Dedup Device (dev_dedup.erl)
-
-```erlang
--export([info/1]).
-
-%% Deduplication via seen-list
-handle(Key, M1, M2, Opts) ->
-    SubjectID = compute_subject_id(M1, M2, Opts),
-    case is_seen(SubjectID, M1) of
-        true  -> {skip, M1};
-        false -> {ok, add_to_seen(M1, SubjectID)}
-    end.
-```
-
-## 5.10 Stack Device (dev_stack.erl)
-
-```erlang
--export([
-    info/1,
-    init/3,
-    compute/3,
-    snapshot/3,
-    normalize/3
-]).
-
-%% Execution modes: fold (sequential) or map (parallel)
-%% Special returns: skip, pass
-```
-
-## 5.11 WASM Device (dev_wasm.erl)
-
-```erlang
--export([
-    info/1,
-    init/3,       %% Boot WASM image
-    compute/3,    %% Call WASM function
-    snapshot/3,   %% Serialize memory
-    normalize/3,  %% Restore from snapshot
-    terminate/3   %% Teardown
-]).
-```
-
-## 5.12 Codec Devices (14 modules)
-
-```erlang
-%% dev_codec_ans104.erl - Arweave bundle format
-%% dev_codec_httpsig.erl - HTTP Signature
-%% dev_codec_json.erl - JSON serialization
-%% dev_codec_flat.erl - Simplified encoding
-%% dev_codec_cookie.erl - Session management
-%% dev_codec_structured.erl - Structured fields
-%% ... and 8 more
-```
+| Key | Type | Description |
+|-----|------|-------------|
+| `Token` | address or nil | Parent token (nil for root ledger) |
+| `Authority` | address | Message signing authority |
+| `Scheduler` | address or list | Accepted scheduler(s) |
+| `Peers` | map | Registered peer ledgers |
 
 ---
 
-# Part 6: CONFIGURATION REFERENCE
+# Appendix A: Commit Reference
 
-## 6.1 Process Configuration
-
-```
-Device: Process/1.0
-Scheduler-Device: Scheduler/1.0
-Execution-Device: Stack/1.0
-Execution-Stack: "Scheduler/1.0", "Cron/1.0", "WASM/1.0", "PoDA/1.0"
-Cache-Frequency: 10
-Cache-Keys: ["results", "state"]
-```
-
-## 6.2 Scheduler Configuration
-
-```erlang
-#{
-    scheduler_lookahead => true,
-    scheduler_location_notify_peers => ["http://peer1:8080", "http://peer2:8080"],
-    scheduler_follow_hints => true
-}
-```
-
-## 6.3 Payment Configuration
-
-```erlang
-#{
-    p4_pricing_device => <<"simple-pay@1.0">>,
-    p4_ledger_device => <<"lua@5.3a">>,
-    p4_non_chargable_routes => [
-        #{<<"template">> => <<"/~p4@1.0/balance">>},
-        #{<<"template">> => <<"/~meta@1.0/*">>}
-    ],
-    p4_recipient => OperatorAddress
-}
-```
-
-## 6.4 LiveNet Configuration
-
-```lua
-TokenProcess = "..."      -- Token contract address
-Admin = "..."             -- Admin wallet address
-DEFAULT_LOCK = 86400000   -- 24 hours in milliseconds
-```
-
-## 6.5 POT Configuration
-
-```erlang
-#{
-    <<"mint-cap">> => 1000000000,     %% Total mintable tokens
-    <<"mint-prop">> => 0.0001,        %% Proportion per time-step
-    <<"step-duration">> => 60000,     %% 1 minute per step
-    <<"chi">> => 0,                   %% Initial chi value
-    <<"minted">> => 0,                %% Initial minted amount
-    <<"last-drip">> => 0              %% Initial timestamp
-}
-```
-
----
-
-# Appendix A: Commit References
-
-| Feature | Key Commits |
-|---------|-------------|
-| Non-fungible stake vaults | 50b6579 (Oct 29, 2025) |
-| O(n²) → O(n) optimization | 6cafa14 (Oct 29, 2025) |
-| Time-indexed auto_finalize | f7b9f32 (Oct 29, 2025) |
-| Precision loss prevention | e9892f0 (Nov 3, 2025) |
-| Mint v3 flow | 379aaa2 (Nov 1, 2025) |
-| POT real-time minting | 0e6dc00 (Nov 5, 2025) |
-| Multi-asset POT | 861c646 (Nov 5, 2025) |
-| Token benchmarks | Nov 5, 2025 |
-| Multisig schedulers | f0ab0e1 (May 14, 2025) |
-| Peer ledgers | 5d0324a (May 13, 2025) |
-| NCC Audit | 27730ba (Feb 23, 2025) |
-| Slot normalization | ecdfc32 (Aug 28, 2025) |
+| Feature | Commit | Date | Author |
+|---------|--------|------|--------|
+| Non-fungible stake vaults | 50b6579 | Oct 29, 2025 | Lucifer0x17 |
+| O(n²) → O(n) removal optimization | 6cafa14 | Oct 29, 2025 | Lucifer0x17 |
+| Time-indexed auto_finalize | f7b9f32 | Oct 29, 2025 | Lucifer0x17 |
+| Mint v3 minimum viable flow | 379aaa2 | Nov 1, 2025 | samcamwilliams |
+| Precision loss prevention | e9892f0 | Nov 3, 2025 | samcamwilliams |
+| POT real-time minting | 0e6dc00 | Nov 5, 2025 | samcamwilliams |
+| Multi-asset POT support | 861c646 | Nov 5, 2025 | samcamwilliams |
+| Token device benchmarks | - | Nov 5, 2025 | Lucifer0x17 |
+| Peer ledgers with tests | 5d0324a | May 13, 2025 | samcamwilliams |
+| Multisig scheduler support | f0ab0e1 | May 14, 2025 | samcamwilliams |
+| Slot normalization | ecdfc32 | Aug 28, 2025 | samuelmanzanera |
+| NCC Audit notation | 27730ba | Feb 23, 2025 | samcamwilliams |
 
 ---
 
 # Appendix B: Branch Index
 
-| Branch | Owner | Focus |
-|--------|-------|-------|
+| Branch | Owner | Focus Area |
+|--------|-------|------------|
 | impr/scheduler-assignments | samuelmanzanera | Slot normalization, ANS-104 wrapping |
-| impr/scheduler-proxy | samcamwilliams | Registration, codec support |
+| impr/scheduler-proxy | samcamwilliams | Registration, codec negotiation |
 | feat/aos2-scheduler-formats | - | AOS2 format compatibility |
 | feat/livenet | Lucifer0x17 | Core staking implementation |
-| feat/native-tokens | samcamwilliams | Token economy |
-| feat/token-device | Lucifer0x17 | Token@1.0 device |
+| feat/native-tokens | samcamwilliams | Token economy infrastructure |
+| feat/token-device | Lucifer0x17 | Token@1.0 device implementation |
 | wip/lucifer_livenet | Lucifer0x17, parthks | LiveNet device testing |
 | feat/mint | samcamwilliams, Lucifer0x17 | Mint v3 implementation |
 | expr/pot | samcamwilliams | POT minting model |
-| feat/mint-indexes | samcamwilliams | Mint subscription |
-| ex/subledger-payments | samcamwilliams | Peer ledgers, multisig |
+| feat/mint-indexes | samcamwilliams | Mint subscription system |
+| ex/subledger-payments | samcamwilliams | Peer ledgers, multisig support |
 | expr/1.5 | samcamwilliams | AO-Core 1.5 type system |
 
 ---
 
 **Document Version**: 1.0.0
 **Generated**: January 24, 2026
-**Source**: HyperBEAM repository analysis (198 branches, 500+ commits)
+**Source**: HyperBEAM repository analysis
