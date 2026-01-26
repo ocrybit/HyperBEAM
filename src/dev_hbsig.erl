@@ -5,7 +5,7 @@
 
 info(_Msg) ->
     #{
-        exports => [json_to_erl, structured_from, structured_to, httpsig_from, httpsig_to, flat_from, flat_to, msg2]
+        exports => [<<"json_to_erl">>, <<"structured_from">>, <<"structured_to">>, <<"httpsig_from">>, <<"httpsig_to">>, <<"flat_from">>, <<"flat_to">>, <<"msg2">>]
     }.
 
 to_erl(Msg) ->
