@@ -9,7 +9,7 @@ info(_Msg) ->
     }.
 
 to_erl(_Msg1, Msg2, Opts) ->
-    JSON = hb_ao:get(<<"body">>, Msg2, Opts#{ hashpath => ignore }),
+    JSON = hb_ao:get(<<"body">>, Msg2, Msg2, Opts#{ hashpath => ignore }),
     Data = json:decode(JSON),
     process_json_data(Data).
 
