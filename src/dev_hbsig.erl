@@ -8,8 +8,8 @@ info(_Msg) ->
         exports => [<<"json_to_erl">>, <<"structured_from">>, <<"structured_to">>, <<"httpsig_from">>, <<"httpsig_to">>, <<"flat_from">>, <<"flat_to">>, <<"msg2">>]
     }.
 
-to_erl(Msg1, Msg2, Opts) ->
-    JSON = hb_ao:get(<<"body">>, Msg2, Opts),
+to_erl(_Msg1, Msg2, Opts) ->
+    JSON = hb_ao:get(<<"body">>, Msg2, Opts#{ hashpath => ignore }),
     Data = json:decode(JSON),
     process_json_data(Data).
 
