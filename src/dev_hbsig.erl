@@ -141,13 +141,13 @@ process_json_data(Other) -> Other.
 %% Simple wrappers that call standard codec devices
 structured_from(Msg1, _Msg2, Opts) ->
     Data = to_erl(Msg1),
-    {ok, OBJ} = dev_codec_structured:from(Data, #{}, Opts),
+    OBJ = dev_codec_structured:from(Data, #{}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 structured_to(Msg1, _Msg2, Opts) ->
     Data = to_erl(Msg1),
-    {ok, OBJ} = dev_codec_structured:to(Data, #{}, Opts),
+    OBJ = dev_codec_structured:to(Data, #{}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
@@ -159,19 +159,19 @@ httpsig_from(Msg1, _Msg2, Opts) ->
 
 httpsig_to(Msg1, _Msg2, Opts) ->
     Data = to_erl(Msg1),
-    {ok, OBJ} = dev_codec_httpsig:to(Data, #{}, Opts),
+    OBJ = dev_codec_httpsig:to(Data, #{}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 flat_from(Msg1, _Msg2, Opts) ->
     Data = to_erl(Msg1),
-    {ok, OBJ} = dev_codec_flat:from(Data, #{}, Opts),
+    OBJ = dev_codec_flat:from(Data, #{}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 flat_to(Msg1, _Msg2, Opts) ->
     Data = to_erl(Msg1),
-    {ok, OBJ} = dev_codec_flat:to(Data, #{}, Opts),
+    OBJ = dev_codec_flat:to(Data, #{}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
