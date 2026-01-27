@@ -18,12 +18,47 @@ to_erl(Msg, Opts) ->
     Data = case JSON of
         <<>> -> #{};
         _ ->
-            %% Use dev_codec_json:from to properly decode TABM format
-            %% This handles ao-types annotations correctly
-            {ok, Decoded} = dev_codec_json:from(JSON, #{}, Opts),
-            Decoded
+            %% Use simple json:decode - process_json_data handles our annotations
+            json:decode(JSON)
     end,
-    process_json_data(Data).
+    %% Convert boolean types to atom types (Erlang codec doesn't have boolean handler)
+    Data1 = process_json_data(Data),
+    convert_boolean_types(Data1).
+
+%% Convert "boolean" type annotations to "atom" and ?1/?0 to "true"/"false"
+%% This is needed because Erlang's codec uses "atom" for true/false values
+%% and ?1/?0 are structured field booleans which don't work with atom decoder
+convert_boolean_types(Map) when is_map(Map) ->
+    %% Convert all values: ?1/?0 to true/false, recursively process maps,
+    %% and convert (ao-type-boolean) to (ao-type-atom) in strings
+    Map1 = maps:map(
+        fun(_K, <<"?1">>) -> <<"true">>;
+           (_K, <<"?0">>) -> <<"false">>;
+           (_K, V) when is_map(V) -> convert_boolean_types(V);
+           (_K, V) when is_binary(V) -> convert_boolean_in_string(V);
+           (_K, V) -> V
+        end, Map),
+    %% Then convert "boolean" type to "atom" in ao-types
+    case maps:get(<<"ao-types">>, Map1, undefined) of
+        undefined ->
+            Map1;
+        AoTypes when is_binary(AoTypes) ->
+            NewAoTypes = binary:replace(AoTypes, <<"\"boolean\"">>, <<"\"atom\"">>, [global]),
+            Map1#{<<"ao-types">> => NewAoTypes};
+        _ ->
+            Map1
+    end;
+convert_boolean_types(Other) ->
+    Other.
+
+%% Convert (ao-type-boolean) to (ao-type-atom) in list string values
+%% Also convert ?1 to true and ?0 to false within the string
+convert_boolean_in_string(Bin) ->
+    %% Replace (ao-type-boolean) with (ao-type-atom)
+    Bin1 = binary:replace(Bin, <<"(ao-type-boolean)">>, <<"(ao-type-atom)">>, [global]),
+    %% Replace boolean values ?1 and ?0 with true and false in atom context
+    Bin2 = binary:replace(Bin1, <<"(ao-type-atom) ?1">>, <<"(ao-type-atom) true">>, [global]),
+    binary:replace(Bin2, <<"(ao-type-atom) ?0">>, <<"(ao-type-atom) false">>, [global]).
 
 %% Return both raw term and formatted string representation
 to_str(Obj) ->
@@ -151,39 +186,84 @@ process_json_data(Value) when is_binary(Value) ->
 process_json_data(Other) -> Other.
 
 %% Simple wrappers that call standard codec devices
+%% Use bundle=>true to disable linkification (keeps nested structures inline)
+%% Note: Erlang codec naming is opposite to JS convention:
+%%   Erlang from = rich→TABM (encode), Erlang to = TABM→rich (decode)
+%%   JS structured_from = TABM→rich (decode), JS structured_to = rich→TABM (encode)
+%% So we swap: structured_from endpoint calls to(), structured_to endpoint calls from()
 structured_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_structured:from(Data, #{}, Opts),
-    Result = to_str(OBJ),
+    {ok, OBJ} = dev_codec_structured:to(Data, #{<<"bundle">> => true}, Opts),
+    %% Post-process to convert numbered maps to lists (beta3 codec doesn't do this automatically)
+    OBJ2 = convert_numbered_maps_to_lists(OBJ),
+    Result = to_str(OBJ2),
     {ok, Result}.
+
+%% Convert numbered maps to lists recursively
+%% A numbered map has keys like <<"1">>, <<"2">>, etc.
+convert_numbered_maps_to_lists(Map) when is_map(Map) ->
+    %% First, recursively process all values
+    Map1 = maps:map(fun(_K, V) -> convert_numbered_maps_to_lists(V) end, Map),
+    %% Check if this map is a numbered map (all keys are numeric strings)
+    Keys = maps:keys(Map1),
+    NumericKeys = lists:filter(fun is_numeric_key/1, Keys),
+    case length(NumericKeys) > 0 andalso length(NumericKeys) == length(Keys) of
+        true ->
+            %% All keys are numeric - convert to list
+            SortedKeys = lists:sort(fun(A, B) ->
+                binary_to_integer(A) < binary_to_integer(B)
+            end, NumericKeys),
+            [maps:get(K, Map1) || K <- SortedKeys];
+        false ->
+            Map1
+    end;
+convert_numbered_maps_to_lists(List) when is_list(List) ->
+    [convert_numbered_maps_to_lists(Item) || Item <- List];
+convert_numbered_maps_to_lists(Other) ->
+    Other.
+
+%% Check if a key is a numeric string like <<"1">>, <<"2">>, etc.
+is_numeric_key(Key) when is_binary(Key) ->
+    try
+        _ = binary_to_integer(Key),
+        true
+    catch _:_ ->
+        false
+    end;
+is_numeric_key(_) ->
+    false.
 
 structured_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_structured:to(Data, #{}, Opts),
+    {ok, OBJ} = dev_codec_structured:from(Data, #{<<"bundle">> => true}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 httpsig_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    {ok, OBJ} = dev_codec_httpsig:from(Data, #{}, Opts),
-    Result = to_str(OBJ),
+    {ok, OBJ} = dev_codec_httpsig:to(Data, #{<<"bundle">> => true}, Opts),
+    %% Post-process to convert numbered maps to lists
+    OBJ2 = convert_numbered_maps_to_lists(OBJ),
+    Result = to_str(OBJ2),
     {ok, Result}.
 
 httpsig_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_httpsig:to(Data, #{}, Opts),
+    {ok, OBJ} = dev_codec_httpsig:from(Data, #{<<"bundle">> => true}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
 flat_from(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_flat:from(Data, #{}, Opts),
-    Result = to_str(OBJ),
+    {ok, OBJ} = dev_codec_flat:to(Data, #{<<"bundle">> => true}, Opts),
+    %% Post-process to convert numbered maps to lists
+    OBJ2 = convert_numbered_maps_to_lists(OBJ),
+    Result = to_str(OBJ2),
     {ok, Result}.
 
 flat_to(_Msg1, Msg2, Opts) ->
     Data = to_erl(Msg2, Opts),
-    OBJ = dev_codec_flat:to(Data, #{}, Opts),
+    {ok, OBJ} = dev_codec_flat:from(Data, #{<<"bundle">> => true}, Opts),
     Result = to_str(OBJ),
     {ok, Result}.
 
