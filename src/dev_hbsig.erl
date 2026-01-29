@@ -5,7 +5,7 @@
 
 to_erl(Msg) ->
     JSON = maps:get(<<"body">>, Msg),
-    Data = dev_codec_json:from(JSON, #{}, #{}),
+    {ok, Data} = dev_codec_json:from(JSON, #{}, #{}),
     process_json_data(Data).
     
 %% Return both raw term and formatted string representation
@@ -199,31 +199,31 @@ is_safe_ascii(Bin) ->
 structured_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    OBJ = dev_codec_structured:from(Data),
-    io:format("OBJ: ~p~n", [OBJ]),    
+    {ok, OBJ} = dev_codec_structured:from(Data, #{}, #{}),
+    io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
 structured_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    OBJ = dev_codec_structured:to(Data),
-    io:format("OBJ: ~p~n", [OBJ]),    
+    {ok, OBJ} = dev_codec_structured:to(Data, #{}, #{}),
+    io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
-httpsig_from(Msg1, Msg2, Opts) ->
+httpsig_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    OBJ = dev_codec_httpsig:from(Data),
-    io:format("httpsig:to: ~p~n", [OBJ]),
+    {ok, OBJ} = dev_codec_httpsig:from(Data, #{}, #{}),
+    io:format("httpsig:from: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
-httpsig_to(Msg1, Msg2, Opts) ->
+httpsig_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    OBJ = dev_codec_httpsig:to(Data),
+    {ok, OBJ} = dev_codec_httpsig:to(Data, #{}, #{}),
     io:format("httpsig:to: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
@@ -231,16 +231,42 @@ httpsig_to(Msg1, Msg2, Opts) ->
 flat_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    OBJ = dev_codec_flat:from(Data),
-    io:format("OBJ: ~p~n", [OBJ]),    
+    % Ensure all leaf values are binaries or maps for dev_codec_flat:from
+    PreparedData = prepare_for_flat(Data),
+    io:format("Prepared data: ~p~n", [PreparedData]),
+    {ok, OBJ} = dev_codec_flat:from(PreparedData, #{}, #{}),
+    io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
+
+%% Convert non-binary leaf values to binaries for dev_codec_flat compatibility
+prepare_for_flat(Map) when is_map(Map) ->
+    maps:map(fun(_K, V) -> prepare_for_flat(V) end, Map);
+prepare_for_flat(List) when is_list(List) ->
+    % Convert list to JSON-like binary representation
+    iolist_to_binary(io_lib:format("~p", [List]));
+prepare_for_flat(Bin) when is_binary(Bin) ->
+    Bin;
+prepare_for_flat(Int) when is_integer(Int) ->
+    integer_to_binary(Int);
+prepare_for_flat(Float) when is_float(Float) ->
+    float_to_binary(Float, [{decimals, 10}, compact]);
+prepare_for_flat(true) ->
+    <<"true">>;
+prepare_for_flat(false) ->
+    <<"false">>;
+prepare_for_flat(null) ->
+    <<"null">>;
+prepare_for_flat(Atom) when is_atom(Atom) ->
+    atom_to_binary(Atom, utf8);
+prepare_for_flat(Other) ->
+    iolist_to_binary(io_lib:format("~p", [Other])).
 
 flat_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    OBJ = dev_codec_flat:to(Data),
-    io:format("OBJ: ~p~n", [OBJ]),    
+    {ok, OBJ} = dev_codec_flat:to(Data, #{}, #{}),
+    io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
