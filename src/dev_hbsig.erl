@@ -226,11 +226,170 @@ httpsig_from(Msg1, _Msg2, _Opts) ->
 httpsig_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    % Use bundle => true to prevent linkification of nested objects
-    {ok, OBJ} = dev_codec_httpsig:to(Data, #{<<"bundle">> => true}, #{}),
+    % Preprocess only unsupported types: boolean→atom, handle empty-* types
+    PreparedData = preprocess_unsupported_types(Data),
+    io:format("After preprocessing: ~p~n", [PreparedData]),
+    % Use bundle => true - Erlang does TABM → structured → TABM internally
+    {ok, OBJ} = dev_codec_httpsig:to(PreparedData, #{<<"bundle">> => true}, #{}),
     io:format("httpsig:to: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
+
+%% Preprocess ONLY unsupported types - minimal changes to not interfere with bundle round-trip
+%% 1. Convert boolean types to atom types in ao-types
+%% 2. Convert ?1/?0 boolean values to true/false strings
+%% 3. Create empty values from empty-* types and remove from ao-types
+preprocess_unsupported_types(Map) when is_map(Map) ->
+    case maps:get(<<"ao-types">>, Map, undefined) of
+        undefined ->
+            % No ao-types, just recurse
+            maps:map(fun(_K, V) -> preprocess_unsupported_types(V) end, Map);
+        AoTypes when is_binary(AoTypes) ->
+            % Only process if ao-types contains boolean or empty-* types
+            HasBoolean = binary:match(AoTypes, <<"boolean">>) =/= nomatch,
+            HasEmpty = binary:match(AoTypes, <<"empty-">>) =/= nomatch,
+            case HasBoolean orelse HasEmpty of
+                false ->
+                    % No unsupported types, just recurse
+                    maps:map(fun(_K, V) -> preprocess_unsupported_types(V) end, Map);
+                true ->
+                    {NewAoTypes, BoolKeys, EmptyEntries} = process_ao_types(AoTypes),
+                    Map2 = convert_boolean_values(Map, BoolKeys),
+                    Map3 = create_empty_values(Map2, EmptyEntries),
+                    Map4 = case NewAoTypes of
+                        <<>> -> maps:remove(<<"ao-types">>, Map3);
+                        _ -> maps:put(<<"ao-types">>, NewAoTypes, Map3)
+                    end,
+                    maps:map(fun(_K, V) -> preprocess_unsupported_types(V) end, Map4)
+            end;
+        _ ->
+            maps:map(fun(_K, V) -> preprocess_unsupported_types(V) end, Map)
+    end;
+preprocess_unsupported_types(Bin) when is_binary(Bin) ->
+    % Convert inline boolean types in values to plain atom values
+    case binary:match(Bin, <<"(ao-type-boolean)">>) of
+        nomatch -> Bin;
+        _ ->
+            % Handle quoted inline annotations: "(ao-type-boolean) ?1" → true (atom)
+            Bin2 = binary:replace(Bin, <<"\"(ao-type-boolean) ?1\"">>, <<"true">>, [global]),
+            Bin3 = binary:replace(Bin2, <<"\"(ao-type-boolean) ?0\"">>, <<"false">>, [global]),
+            % Handle unquoted inline annotations: (ao-type-boolean) ?1 → true (atom)
+            Bin4 = binary:replace(Bin3, <<"(ao-type-boolean) ?1">>, <<"true">>, [global]),
+            binary:replace(Bin4, <<"(ao-type-boolean) ?0">>, <<"false">>, [global])
+    end;
+preprocess_unsupported_types(List) when is_list(List) ->
+    [preprocess_unsupported_types(Item) || Item <- List];
+preprocess_unsupported_types(Other) ->
+    Other.
+
+%% Preprocess data to handle types not supported by structured codec
+%% - Convert boolean types to atom types (SF format ?1/?0 → true/false)
+%% - Create empty values from empty-* type annotations
+%% - Remove empty-* types from ao-types (not supported by structured codec)
+preprocess_types(Map) when is_map(Map) ->
+    AoTypes = maps:get(<<"ao-types">>, Map, undefined),
+    case AoTypes of
+        undefined ->
+            maps:map(fun(_K, V) -> preprocess_types(V) end, Map);
+        _ ->
+            {NewAoTypes, BoolKeys, EmptyEntries} = process_ao_types(AoTypes),
+            Map2 = convert_boolean_values(Map, BoolKeys),
+            Map3 = create_empty_values(Map2, EmptyEntries),
+            Map4 = case NewAoTypes of
+                <<>> -> maps:remove(<<"ao-types">>, Map3);
+                _ -> maps:put(<<"ao-types">>, NewAoTypes, Map3)
+            end,
+            maps:map(fun(_K, V) -> preprocess_types(V) end, Map4)
+    end;
+preprocess_types(Bin) when is_binary(Bin) ->
+    % Convert inline boolean types: "(ao-type-boolean) ?1" → "(ao-type-atom) true"
+    Bin2 = binary:replace(Bin, <<"(ao-type-boolean) ?1">>, <<"(ao-type-atom) true">>, [global]),
+    binary:replace(Bin2, <<"(ao-type-boolean) ?0">>, <<"(ao-type-atom) false">>, [global]);
+preprocess_types(Other) ->
+    Other.
+
+%% Process ao-types: convert boolean→atom, extract empty-* entries, return cleaned ao-types
+process_ao_types(AoTypes) when is_binary(AoTypes) ->
+    Parts = binary:split(AoTypes, <<", ">>, [global]),
+    {NewParts, BoolKeys, EmptyEntries} = lists:foldl(fun(Part, {PAcc, BAcc, EAcc}) ->
+        case extract_type_annotation(Part) of
+            {ok, Key, <<"boolean">>} ->
+                NewPart = <<Key/binary, "=\"atom\"">>,
+                {[NewPart | PAcc], [Key | BAcc], EAcc};
+            {ok, Key, <<"empty-", _/binary>> = EmptyType} ->
+                % Keep the original key (may be URL-encoded) to match JS behavior
+                {PAcc, BAcc, [{Key, EmptyType} | EAcc]};
+            _ ->
+                {[Part | PAcc], BAcc, EAcc}
+        end
+    end, {[], [], []}, Parts),
+    {iolist_to_binary(lists:join(<<", ">>, lists:reverse(NewParts))), BoolKeys, EmptyEntries};
+process_ao_types(Other) ->
+    {Other, [], []}.
+
+%% Extract key and type from annotation like 'key="type"'
+extract_type_annotation(Part) ->
+    case binary:match(Part, <<"=\"">>) of
+        {Pos, _} ->
+            Key = binary:part(Part, 0, Pos),
+            RestStart = Pos + 2,
+            RestLen = byte_size(Part) - RestStart - 1,
+            case RestLen > 0 of
+                true ->
+                    Type = binary:part(Part, RestStart, RestLen),
+                    {ok, Key, Type};
+                false ->
+                    error
+            end;
+        nomatch ->
+            error
+    end.
+
+%% URL decode (e.g., %2d → -)
+url_decode(Bin) ->
+    url_decode(Bin, <<>>).
+url_decode(<<>>, Acc) ->
+    Acc;
+url_decode(<<$%, H1, H2, Rest/binary>>, Acc) ->
+    Char = (hex_to_int(H1) bsl 4) bor hex_to_int(H2),
+    url_decode(Rest, <<Acc/binary, Char>>);
+url_decode(<<C, Rest/binary>>, Acc) ->
+    url_decode(Rest, <<Acc/binary, C>>).
+
+hex_to_int(C) when C >= $0, C =< $9 -> C - $0;
+hex_to_int(C) when C >= $a, C =< $f -> C - $a + 10;
+hex_to_int(C) when C >= $A, C =< $F -> C - $A + 10.
+
+%% Convert boolean values from SF format (?1/?0) to atom format (true/false)
+convert_boolean_values(Map, []) -> Map;
+convert_boolean_values(Map, [Key | Rest]) ->
+    LowerKey = list_to_binary(string:lowercase(binary_to_list(Key))),
+    Map2 = case maps:get(LowerKey, Map, undefined) of
+        <<"?1">> -> maps:put(LowerKey, <<"true">>, Map);
+        <<"?0">> -> maps:put(LowerKey, <<"false">>, Map);
+        _ ->
+            case maps:get(Key, Map, undefined) of
+                <<"?1">> -> maps:put(Key, <<"true">>, Map);
+                <<"?0">> -> maps:put(Key, <<"false">>, Map);
+                _ -> Map
+            end
+    end,
+    convert_boolean_values(Map2, Rest).
+
+%% Create native empty values from empty-* type entries
+create_empty_values(Map, []) -> Map;
+create_empty_values(Map, [{Key, EmptyType} | Rest]) ->
+    LowerKey = list_to_binary(string:lowercase(binary_to_list(Key))),
+    EmptyValue = case EmptyType of
+        <<"empty-binary">> -> <<>>;
+        <<"empty-list">> -> [];
+        <<"empty-message">> -> #{}
+    end,
+    Map2 = case maps:is_key(LowerKey, Map) of
+        true -> Map;
+        false -> maps:put(LowerKey, EmptyValue, Map)
+    end,
+    create_empty_values(Map2, Rest).
 
 flat_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
@@ -274,7 +433,66 @@ flat_to(Msg1, _Msg2, _Opts) ->
     Result = to_str(OBJ),
     {ok, Result}.
 
-msg2(Msg, Msg2, Opts) -> 
-    io:format("OBJ: ~p~n", [Msg2]),    
-    Result = to_str(Msg2),
+msg2(Msg, Msg2, Opts) ->
+    io:format("msg2 Msg2 ao-types: ~p~n", [maps:get(<<"ao-types">>, Msg2, not_found)]),
+    % Process empty values from ao-types using Msg2 (which has the HTTP headers)
+    Msg3 = process_ao_types_empty_values(Msg2, Msg2),
+    io:format("OBJ: ~p~n", [Msg3]),
+    Result = to_str(Msg3),
     {ok, Result}.
+
+%% Process ao-types and add empty values for empty-* type annotations.
+%% Also remove the default empty body if it's not in ao-types.
+process_ao_types_empty_values(Msg, Msg2) ->
+    AoTypes = maps:get(<<"ao-types">>, Msg, <<>>),
+    case AoTypes of
+        <<>> -> Msg2;
+        _ ->
+            % Parse ao-types to get empty type annotations
+            EmptyKeys = parse_empty_types(AoTypes),
+            % Add empty values for keys that have empty-* types
+            Msg3 = lists:foldl(
+                fun({Key, Type}, Acc) ->
+                    case Type of
+                        <<"empty-binary">> ->
+                            maps:put(Key, <<>>, Acc);
+                        <<"empty-list">> ->
+                            maps:put(Key, [], Acc);
+                        <<"empty-message">> ->
+                            maps:put(Key, #{}, Acc);
+                        _ ->
+                            Acc
+                    end
+                end,
+                Msg2,
+                EmptyKeys
+            ),
+            % If body is empty and not in ao-types, remove it
+            % (it's just a default from the HTTP layer)
+            BodyInAoTypes = lists:any(
+                fun({K, _}) -> K =:= <<"body">> end,
+                EmptyKeys
+            ),
+            case maps:get(<<"body">>, Msg3, undefined) of
+                <<>> when not BodyInAoTypes ->
+                    maps:remove(<<"body">>, Msg3);
+                _ ->
+                    Msg3
+            end
+    end.
+
+%% Parse ao-types string and return list of {Key, Type} for empty-* types
+parse_empty_types(AoTypes) ->
+    % Split by ", " and parse each key="type" pair
+    Pairs = binary:split(AoTypes, <<", ">>, [global]),
+    lists:filtermap(
+        fun(Pair) ->
+            case re:run(Pair, <<"^(.+?)=\"(empty-[^\"]+)\"$">>, [{capture, [1, 2], binary}]) of
+                {match, [Key, Type]} ->
+                    {true, {Key, Type}};
+                _ ->
+                    false
+            end
+        end,
+        Pairs
+    ).
