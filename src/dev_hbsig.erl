@@ -199,7 +199,8 @@ is_safe_ascii(Bin) ->
 structured_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    {ok, OBJ} = dev_codec_structured:from(Data, #{}, #{}),
+    % Use bundle => true to prevent linkification of nested objects
+    {ok, OBJ} = dev_codec_structured:from(Data, #{<<"bundle">> => true}, #{}),
     io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
@@ -207,7 +208,8 @@ structured_from(Msg1, _Msg2, _Opts) ->
 structured_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    {ok, OBJ} = dev_codec_structured:to(Data, #{}, #{}),
+    % Use bundle => true to prevent linkification of nested objects
+    {ok, OBJ} = dev_codec_structured:to(Data, #{<<"bundle">> => true}, #{}),
     io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
@@ -215,7 +217,8 @@ structured_to(Msg1, _Msg2, _Opts) ->
 httpsig_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    {ok, OBJ} = dev_codec_httpsig:from(Data, #{}, #{}),
+    % Use bundle => true to prevent linkification of nested objects
+    {ok, OBJ} = dev_codec_httpsig:from(Data, #{<<"bundle">> => true}, #{}),
     io:format("httpsig:from: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
@@ -223,7 +226,8 @@ httpsig_from(Msg1, _Msg2, _Opts) ->
 httpsig_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
     io:format("After structured field decode: ~p~n", [Data]),
-    {ok, OBJ} = dev_codec_httpsig:to(Data, #{}, #{}),
+    % Use bundle => true to prevent linkification of nested objects
+    {ok, OBJ} = dev_codec_httpsig:to(Data, #{<<"bundle">> => true}, #{}),
     io:format("httpsig:to: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
