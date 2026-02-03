@@ -5,8 +5,13 @@
 
 to_erl(Msg) ->
     JSON = maps:get(<<"body">>, Msg),
-    {ok, Data} = dev_codec_json:from(JSON, #{}, #{}),
-    process_json_data(Data).
+    % Bypass dev_codec_json to avoid linkification
+    % dev_codec_json:from passes empty Req to structured codec which causes linkification
+    % Instead, we decode JSON directly and convert with bundle => true
+    Decoded = json:decode(JSON),
+    {ok, Structured} = dev_codec_structured:to(Decoded, #{<<"bundle">> => true}, #{}),
+    {ok, TABM} = dev_codec_structured:from(Structured, #{<<"bundle">> => true}, #{}),
+    process_json_data(TABM).
     
 %% Return both raw term and formatted string representation
 to_str(Obj) -> 
