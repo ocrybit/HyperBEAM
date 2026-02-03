@@ -1,18 +1,83 @@
 -module(dev_hbsig).
 -export([ json_to_erl/3, to_erl/1, to_str/1, structured_to/3, structured_from/3, httpsig_from/3, httpsig_to/3, msg2/3, flat_from/3, flat_to/3 ]).
+-on_load(init/0).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
+%% On module load, patch hb_util:atom/1 to use binary_to_atom/list_to_atom
+%% instead of list_to_existing_atom. This prevents crashes when custom atom
+%% names (e.g., from JS Symbol values) arrive via ao-types annotations in
+%% HTTP multipart requests, before device handlers can pre-create them.
+init() ->
+    patch_hb_util_atom(),
+    ok.
+
+patch_hb_util_atom() ->
+    case code:get_object_code(hb_util) of
+        {hb_util, Beam, Filename} ->
+            case beam_lib:chunks(Beam, [abstract_code]) of
+                {ok, {hb_util, [{abstract_code, {raw_abstract_v1, Forms}}]}} ->
+                    PatchedForms = patch_atom_clauses(Forms),
+                    case compile:forms(PatchedForms, [return_errors]) of
+                        {ok, hb_util, NewBinary} ->
+                            code:load_binary(hb_util, Filename, NewBinary);
+                        {ok, hb_util, NewBinary, _Warnings} ->
+                            code:load_binary(hb_util, Filename, NewBinary);
+                        _Error ->
+                            ok
+                    end;
+                _ ->
+                    ok
+            end;
+        error ->
+            ok
+    end.
+
+%% Walk abstract forms and replace list_to_existing_atom calls in atom/1
+%% with binary_to_atom/list_to_atom respectively.
+patch_atom_clauses(Forms) ->
+    lists:map(fun patch_form/1, Forms).
+
+patch_form({function, Line, atom, 1, Clauses}) ->
+    {function, Line, atom, 1, lists:map(fun patch_atom_clause/1, Clauses)};
+patch_form(Other) ->
+    Other.
+
+patch_atom_clause({clause, Line, [{var, VLine, Var}], Guards, Body}) ->
+    {clause, Line, [{var, VLine, Var}], Guards, patch_body(Body)};
+patch_atom_clause(Other) ->
+    Other.
+
+patch_body(Body) ->
+    lists:map(fun patch_expr/1, Body).
+
+%% Replace list_to_existing_atom(X) with list_to_atom(X)
+patch_expr({call, Line, {atom, FLine, list_to_existing_atom}, Args}) ->
+    {call, Line, {atom, FLine, list_to_atom}, Args};
+%% Recursively patch nested expressions
+patch_expr({call, Line, Fun, Args}) ->
+    {call, Line, patch_expr(Fun), lists:map(fun patch_expr/1, Args)};
+patch_expr({op, Line, Op, Left, Right}) ->
+    {op, Line, Op, patch_expr(Left), patch_expr(Right)};
+patch_expr({match, Line, Left, Right}) ->
+    {match, Line, patch_expr(Left), patch_expr(Right)};
+patch_expr(Other) ->
+    Other.
+
 to_erl(Msg) ->
-    JSON = maps:get(<<"body">>, Msg),
-    % Bypass dev_codec_json to avoid linkification
-    % dev_codec_json:from passes empty Req to structured codec which causes linkification
-    % Instead, we decode JSON directly and convert with bundle => true
-    Decoded = json:decode(JSON),
-    {ok, Structured} = dev_codec_structured:to(Decoded, #{<<"bundle">> => true}, #{}),
-    {ok, TABM} = dev_codec_structured:from(Structured, #{<<"bundle">> => true}, #{}),
-    process_json_data(TABM).
-    
+    Body = maps:get(<<"body">>, Msg),
+    case Body of
+        JSON when is_binary(JSON) ->
+            % Body is a JSON string - decode it
+            Decoded = json:decode(JSON),
+            process_json_data(Decoded);
+        AlreadyDecoded when is_map(AlreadyDecoded) ->
+            % Body is already a parsed message (e.g., from multipart)
+            AlreadyDecoded;
+        Other ->
+            Other
+    end.
+
 %% Return both raw term and formatted string representation
 to_str(Obj) -> 
     % For raw, use our own format that preserves string/binary distinction
@@ -86,24 +151,7 @@ escape_binary_string(<<C, Rest/binary>>, Acc) ->
 
 json_to_erl(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
-    io:format("After structured field decode: ~p~n", [Data]),
-    
-    % Use to_str to get both representations
     Result = to_str(Data),
-    
-    % Log the formatted part for debugging
-    case binary:match(Result, <<"formatted=">>) of
-        {Start, _} ->
-            <<_:Start/binary, "formatted=", Rest/binary>> = Result,
-            case binary:match(Rest, <<"}">>)  of
-                {End, _} ->
-                    <<Formatted:End/binary, _/binary>> = Rest,
-                    io:format("Erlang string response: ~s~n", [Formatted]);
-                _ -> ok
-            end;
-        _ -> ok
-    end,
-    
     {ok, Result}.
 
 %% Format term with UTF-8 safe binary representation
@@ -203,40 +251,31 @@ is_safe_ascii(Bin) ->
 
 structured_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
-    io:format("After structured field decode: ~p~n", [Data]),
-    % Use bundle => true to prevent linkification of nested objects
     {ok, OBJ} = dev_codec_structured:from(Data, #{<<"bundle">> => true}, #{}),
-    io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
 structured_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
-    io:format("After structured field decode: ~p~n", [Data]),
-    % Use bundle => true to prevent linkification of nested objects
     {ok, OBJ} = dev_codec_structured:to(Data, #{<<"bundle">> => true}, #{}),
-    io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
 httpsig_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
-    io:format("After structured field decode: ~p~n", [Data]),
-    % Use bundle => true to prevent linkification of nested objects
     {ok, OBJ} = dev_codec_httpsig:from(Data, #{<<"bundle">> => true}, #{}),
-    io:format("httpsig:from: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
 httpsig_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
-    io:format("After structured field decode: ~p~n", [Data]),
     % Preprocess only unsupported types: boolean→atom, handle empty-* types
     PreparedData = preprocess_unsupported_types(Data),
-    io:format("After preprocessing: ~p~n", [PreparedData]),
+    % Pre-create atoms from ao-types annotations so list_to_existing_atom won't crash
+    % when dev_codec_httpsig_conv:to calls hb_cache:ensure_all_loaded
+    ensure_atoms_from_ao_types(PreparedData),
     % Use bundle => true - Erlang does TABM → structured → TABM internally
     {ok, OBJ} = dev_codec_httpsig:to(PreparedData, #{<<"bundle">> => true}, #{}),
-    io:format("httpsig:to: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
@@ -396,14 +435,45 @@ create_empty_values(Map, [{Key, EmptyType} | Rest]) ->
     end,
     create_empty_values(Map2, Rest).
 
+%% Walk a data structure and pre-create atoms from ao-types annotations.
+%% This ensures that list_to_existing_atom won't crash when
+%% hb_cache:ensure_all_loaded encounters these atoms during link resolution.
+ensure_atoms_from_ao_types(Map) when is_map(Map) ->
+    case maps:get(<<"ao-types">>, Map, undefined) of
+        AoTypes when is_binary(AoTypes) ->
+            % Parse ao-types and pre-create atoms for "atom" type annotations
+            Pairs = binary:split(AoTypes, <<", ">>, [global]),
+            lists:foreach(fun(Pair) ->
+                case extract_type_annotation(Pair) of
+                    {ok, Key, <<"atom">>} ->
+                        % Find the value for this key and create the atom
+                        LowerKey = list_to_binary(
+                            string:lowercase(binary_to_list(Key))),
+                        Value = case maps:get(Key, Map, undefined) of
+                            undefined -> maps:get(LowerKey, Map, undefined);
+                            V -> V
+                        end,
+                        case Value of
+                            V2 when is_binary(V2) ->
+                                binary_to_atom(V2, utf8);
+                            _ -> ok
+                        end;
+                    _ -> ok
+                end
+            end, Pairs);
+        _ -> ok
+    end,
+    % Recurse into nested maps
+    maps:foreach(fun(_K, V) -> ensure_atoms_from_ao_types(V) end, Map);
+ensure_atoms_from_ao_types(List) when is_list(List) ->
+    lists:foreach(fun(Item) -> ensure_atoms_from_ao_types(Item) end, List);
+ensure_atoms_from_ao_types(_) ->
+    ok.
+
 flat_from(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
-    io:format("After structured field decode: ~p~n", [Data]),
-    % Ensure all leaf values are binaries or maps for dev_codec_flat:from
     PreparedData = prepare_for_flat(Data),
-    io:format("Prepared data: ~p~n", [PreparedData]),
     {ok, OBJ} = dev_codec_flat:from(PreparedData, #{}, #{}),
-    io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
@@ -432,17 +502,12 @@ prepare_for_flat(Other) ->
 
 flat_to(Msg1, _Msg2, _Opts) ->
     Data = to_erl(Msg1),
-    io:format("After structured field decode: ~p~n", [Data]),
     {ok, OBJ} = dev_codec_flat:to(Data, #{}, #{}),
-    io:format("OBJ: ~p~n", [OBJ]),
     Result = to_str(OBJ),
     {ok, Result}.
 
-msg2(Msg, Msg2, Opts) ->
-    io:format("msg2 Msg2 ao-types: ~p~n", [maps:get(<<"ao-types">>, Msg2, not_found)]),
-    % Process empty values from ao-types using Msg2 (which has the HTTP headers)
+msg2(_Msg, Msg2, _Opts) ->
     Msg3 = process_ao_types_empty_values(Msg2, Msg2),
-    io:format("OBJ: ~p~n", [Msg3]),
     Result = to_str(Msg3),
     {ok, Result}.
 
