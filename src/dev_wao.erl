@@ -40,8 +40,11 @@ snapshot(Msg, _Msg2, _Opts) -> {ok, Msg}.
 normalize(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
 cache_module(Msg1, _Msg2, Opts) ->
-    Binary = hb_ao:get(<<"data">>, Msg1, <<>>, Opts),
+    RawData = hb_ao:get(<<"data">>, Msg1, <<>>, Opts),
     Type = hb_ao:get(<<"type">>, Msg1, <<>>, Opts),
+    %% Decode base64 if the data appears to be base64-encoded.
+    %% Client sends WASM/binary as base64 to avoid HTTP signature mismatch.
+    Binary = try_decode_base64(RawData),
     ModuleMsg = #{ <<"content-type">> => Type, <<"body">> => Binary },
     case hb_cache:write(ModuleMsg, Opts) of
 	{ok, BinaryID} ->
@@ -54,6 +57,41 @@ cache_module(Msg1, _Msg2, Opts) ->
 		      <<"status">> => 500,
 		      <<"body">> => <<"Failed to cache file">>
 		     }}
+    end.
+
+%% Try to decode base64, return original if not valid base64
+try_decode_base64(Data) when is_binary(Data) ->
+    try
+        %% Check if it looks like base64 (only contains valid base64 chars)
+        case is_likely_base64(Data) of
+            true ->
+                Decoded = base64:decode(Data),
+                %% Verify by checking WASM magic bytes or just accept if decode succeeded
+                Decoded;
+            false ->
+                Data
+        end
+    catch
+        _:_ -> Data
+    end;
+try_decode_base64(Data) -> Data.
+
+%% Check if data looks like base64 (all chars are valid base64 chars)
+is_likely_base64(Data) when is_binary(Data) ->
+    %% Base64 only contains A-Z, a-z, 0-9, +, /, =
+    %% WASM binary would have bytes outside this range
+    try
+        lists:all(
+            fun(Byte) ->
+                (Byte >= $A andalso Byte =< $Z) orelse
+                (Byte >= $a andalso Byte =< $z) orelse
+                (Byte >= $0 andalso Byte =< $9) orelse
+                Byte =:= $+ orelse Byte =:= $/ orelse Byte =:= $=
+            end,
+            binary_to_list(Data)
+        )
+    catch
+        _:_ -> false
     end.
 
 httpsig(Msg, Msg2, Opts) -> 
