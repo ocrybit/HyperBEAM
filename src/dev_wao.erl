@@ -5,16 +5,21 @@
 -include("include/hb.hrl").
 
 cron(Msg1, Msg2, Opts) ->
-    Target = hb_ao:get(<<"target">>, Msg1, not_found, Opts),
+    Target = case hb_ao:get(<<"target">>, Msg1, not_found, Opts) of
+        not_found -> hb_ao:get(<<"target">>, Msg2, not_found, Opts);
+        T -> T
+    end,
     Wallet = hb_opts:get(priv_wallet, not_found, Opts),
-    Msg = #{
-	    <<"device">> => <<"process@1.0">>,
-	    <<"path">> => <<"schedule">>,
-	    <<"target">> => Target,
-	    <<"method">> => <<"POST">>,
-	    <<"body">> => hb_message:commit( #{ }, Wallet )
-	   },
-    hb_ao:resolve( Msg, Opts ).
+    Body = hb_message:commit( #{ <<"type">> => <<"Message">> }, Wallet ),
+    SchedPid = dev_scheduler_registry:find(Target),
+    %% Fire-and-forget: send schedule message directly to scheduler server
+    %% and return immediately. The scheduler will process it asynchronously.
+    %% We use a throwaway process as the reply target so we don't pollute
+    %% the cron worker's mailbox.
+    Sink = spawn(fun() -> receive _ -> ok after 30000 -> ok end end),
+    AbortTime = erlang:system_time(millisecond) + 30000,
+    SchedPid ! {schedule, Body, Sink, AbortTime},
+    {ok, #{}}.
 
 info(Msg1, Msg2_, Opts) ->
     JSON = dev_codec_json:to(#{ <<"version">> => <<"1.0">> }),
