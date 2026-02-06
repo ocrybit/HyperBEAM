@@ -20,6 +20,9 @@ init() ->
     patch_dev_scheduler_gateway(),
     patch_dev_codec_json_bundle(),
     patch_codec_structured_binary(),
+    patch_hb_cache_control_write(),
+    patch_dev_codec_httpsig_sig_params(),
+    patch_hb_start_mainnet(),
     ok.
 
 %% Pre-create prometheus ETS tables owned by a long-lived process.
@@ -1179,3 +1182,193 @@ parse_empty_types(AoTypes) ->
         end,
         Pairs
     ).
+
+%% ============================================================
+%% Hot-patch hb_cache_control:perform_cache_write/4
+%% Wraps the function body in try-catch to handle unresolvable links
+%% from delegated CU results gracefully (returns skip_caching).
+%% ============================================================
+patch_hb_cache_control_write() ->
+    case get_module_forms(hb_cache_control) of
+        {ok, Forms, Filename} ->
+            PatchedForms = patch_cache_control_forms(Forms),
+            case compile:forms(PatchedForms, [return_errors]) of
+                {ok, hb_cache_control, NewBinary} ->
+                    code:load_binary(hb_cache_control, Filename, NewBinary);
+                {ok, hb_cache_control, NewBinary, _Warnings} ->
+                    code:load_binary(hb_cache_control, Filename, NewBinary);
+                _Error -> ok
+            end;
+        error -> ok
+    end.
+
+patch_cache_control_forms(Forms) ->
+    lists:map(fun patch_cache_control_form/1, Forms).
+
+patch_cache_control_form({function, Line, perform_cache_write, 4, Clauses}) ->
+    {function, Line, perform_cache_write, 4,
+        lists:map(fun wrap_clause_skip_caching/1, Clauses)};
+patch_cache_control_form(Other) -> Other.
+
+%% Wrap a clause body in try/catch returning skip_caching on exception
+wrap_clause_skip_caching({clause, CL, Args, Guards, Body}) ->
+    {clause, CL, Args, Guards,
+        [{'try', CL, Body, [],
+            [{clause, CL,
+                [{tuple, CL,
+                    [{var, CL, '_'}, {var, CL, '_'}, {var, CL, '_'}]}],
+                [],
+                [{atom, CL, skip_caching}]}],
+            []}]}.
+
+%% ============================================================
+%% Hot-patch dev_codec_httpsig:signature_params_line/2
+%% Checks for stored signature-input in the commitment before
+%% rebuilding from scratch. This ensures JS-signed commitments
+%% verify correctly when the JS params format differs from what
+%% HyperBEAM would rebuild.
+%% ============================================================
+patch_dev_codec_httpsig_sig_params() ->
+    case get_module_forms(dev_codec_httpsig) of
+        {ok, Forms, Filename} ->
+            PatchedForms = patch_httpsig_sig_params_forms(Forms),
+            case compile:forms(PatchedForms, [return_errors]) of
+                {ok, dev_codec_httpsig, NewBinary} ->
+                    code:load_binary(dev_codec_httpsig, Filename, NewBinary);
+                {ok, dev_codec_httpsig, NewBinary, _Warnings} ->
+                    code:load_binary(dev_codec_httpsig, Filename, NewBinary);
+                _Error -> ok
+            end;
+        error -> ok
+    end.
+
+%% Replace signature_params_line/2 with a wrapper that checks stored
+%% signature-input first, and rename original to hbsig_rebuild_sig_params/2.
+patch_httpsig_sig_params_forms(Forms) ->
+    lists:foldr(fun(Form, Acc) ->
+        case Form of
+            {function, Line, signature_params_line, 2, Clauses} ->
+                %% Rename original function
+                Orig = {function, Line, hbsig_rebuild_sig_params, 2, Clauses},
+                %% Build wrapper that checks stored signature-input
+                Wrapper = build_sig_params_wrapper(Line),
+                %% Build extract helper
+                ExtractFn = build_extract_sig_input(Line),
+                [Wrapper, Orig, ExtractFn | Acc];
+            _ ->
+                [Form | Acc]
+        end
+    end, [], Forms).
+
+build_sig_params_wrapper(L) ->
+    {function, L, signature_params_line, 2, [
+        {clause, L,
+            [{var, L, 'RawCommitment'}, {var, L, 'Opts'}],
+            [],
+            [{'case', L,
+                {call, L, {remote, L, {atom, L, maps}, {atom, L, get}},
+                    [{bin, L, [{bin_element, L,
+                        {string, L, "signature-input"}, default, default}]},
+                     {var, L, 'RawCommitment'},
+                     {atom, L, not_found}]},
+                [
+                    {clause, L,
+                        [{atom, L, not_found}],
+                        [],
+                        [{call, L, {atom, L, hbsig_rebuild_sig_params},
+                            [{var, L, 'RawCommitment'}, {var, L, 'Opts'}]}]},
+                    {clause, L,
+                        [{var, L, 'StoredSigInput'}],
+                        [[{call, L, {atom, L, is_binary},
+                            [{var, L, 'StoredSigInput'}]}]],
+                        [{call, L, {atom, L, hbsig_extract_sig_input},
+                            [{var, L, 'StoredSigInput'}]}]},
+                    {clause, L,
+                        [{var, L, '_'}],
+                        [],
+                        [{call, L, {atom, L, hbsig_rebuild_sig_params},
+                            [{var, L, 'RawCommitment'}, {var, L, 'Opts'}]}]}
+                ]}
+            ]}
+    ]}.
+
+build_extract_sig_input(L) ->
+    {function, L, hbsig_extract_sig_input, 1, [
+        {clause, L,
+            [{var, L, 'SigInput'}],
+            [],
+            [{'case', L,
+                {call, L, {remote, L, {atom, L, binary}, {atom, L, split}},
+                    [{var, L, 'SigInput'},
+                     {bin, L, [{bin_element, L,
+                        {string, L, "="}, default, default}]}]},
+                [
+                    {clause, L,
+                        [{cons, L, {var, L, '_SigName'},
+                            {cons, L, {var, L, 'ParamsLine'}, {nil, L}}}],
+                        [],
+                        [{var, L, 'ParamsLine'}]},
+                    {clause, L,
+                        [{var, L, '_'}],
+                        [],
+                        [{call, L, {atom, L, throw},
+                            [{tuple, L,
+                                [{atom, L, invalid_signature_input},
+                                 {var, L, 'SigInput'}]}]}]}
+                ]}
+            ]}
+    ]}.
+
+%% ============================================================
+%% Hot-patch hb:start_mainnet/1
+%% Makes the store option configurable - uses user-provided store
+%% from BaseOpts if present, otherwise defaults to cache-mainnet.
+%% ============================================================
+patch_hb_start_mainnet() ->
+    case get_module_forms(hb) of
+        {ok, Forms, Filename} ->
+            PatchedForms = patch_start_mainnet_forms(Forms),
+            case compile:forms(PatchedForms, [return_errors]) of
+                {ok, hb, NewBinary} ->
+                    code:load_binary(hb, Filename, NewBinary);
+                {ok, hb, NewBinary, _Warnings} ->
+                    code:load_binary(hb, Filename, NewBinary);
+                _Error -> ok
+            end;
+        error -> ok
+    end.
+
+patch_start_mainnet_forms(Forms) ->
+    lists:map(fun patch_start_mainnet_form/1, Forms).
+
+patch_start_mainnet_form({function, Line, start_mainnet, 1, Clauses}) ->
+    {function, Line, start_mainnet, 1,
+        lists:map(fun patch_start_mainnet_clause/1, Clauses)};
+patch_start_mainnet_form(Other) -> Other.
+
+%% Walk the clause body and find the map update on BaseOpts that sets store,
+%% then replace the hardcoded store value with maps:get(store, BaseOpts, Default).
+patch_start_mainnet_clause({clause, CL, Args, Guards, Body}) ->
+    {clause, CL, Args, Guards, [patch_store_in_map_update(E) || E <- Body]}.
+
+patch_store_in_map_update({call, L, Fun, CallArgs}) ->
+    {call, L, Fun, [patch_store_in_map_update(A) || A <- CallArgs]};
+patch_store_in_map_update({match, L, Pat, Rhs}) ->
+    {match, L, Pat, patch_store_in_map_update(Rhs)};
+patch_store_in_map_update({map, L, BaseMap, Fields}) ->
+    NewFields = lists:map(fun(Field) ->
+        case Field of
+            {map_field_assoc, FL, {atom, _, store}, StoreExpr} ->
+                %% Replace: store => #{...}
+                %% With:    store => maps:get(store, BaseOpts, #{...})
+                NewVal = {call, FL,
+                    {remote, FL, {atom, FL, maps}, {atom, FL, get}},
+                    [{atom, FL, store},
+                     BaseMap,
+                     StoreExpr]},
+                {map_field_assoc, FL, {atom, FL, store}, NewVal};
+            Other -> Other
+        end
+    end, Fields),
+    {map, L, BaseMap, NewFields};
+patch_store_in_map_update(Other) -> Other.

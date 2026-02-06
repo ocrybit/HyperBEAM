@@ -131,29 +131,20 @@ async_writer() ->
     end.
 
 %% @doc Internal function to write a compute result to the cache.
-%% Wrap in try-catch to handle unresolvable links gracefully.
-%% This can happen when caching compute results from a delegated CU that
-%% contain references to messages not in the local cache.
 perform_cache_write(Msg1, Msg2, Msg3, Opts) ->
-    try
-        hb_cache:write(Msg1, Opts),
-        hb_cache:write(Msg2, Opts),
-        case Msg3 of
-            <<_/binary>> ->
-                hb_cache:write_binary(
-                    hb_path:hashpath(Msg1, Msg2, Opts),
-                    Msg3,
-                    Opts
-                );
-            Map when is_map(Map) ->
-                hb_cache:write(Msg3, Opts);
-            _ ->
-                ?event({cannot_write_result, Msg3}),
-                skip_caching
-        end
-    catch
-        _:Error:_Stack ->
-            ?event(caching, {cache_write_failed, {error, Error}}),
+    hb_cache:write(Msg1, Opts),
+    hb_cache:write(Msg2, Opts),
+    case Msg3 of
+        <<_/binary>> ->
+            hb_cache:write_binary(
+                hb_path:hashpath(Msg1, Msg2, Opts),
+                Msg3,
+                Opts
+            );
+        Map when is_map(Map) ->
+            hb_cache:write(Msg3, Opts);
+        _ ->
+            ?event({cannot_write_result, Msg3}),
             skip_caching
     end.
 

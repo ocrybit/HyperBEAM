@@ -460,35 +460,7 @@ signature_components_line(Req, Commitment, _Opts) ->
 %% @doc construct the "signature-params-line" part of the signature base.
 %%
 %% See https://datatracker.ietf.org/doc/html/rfc9421#section-2.5-7.3.2.4
-%%
-%% If the commitment includes a stored signature-input, extract and use the
-%% params line from it directly. This ensures the signature base matches what
-%% was actually signed, especially for signatures from JS clients that may not
-%% use @-prefixed derived component names.
 signature_params_line(RawCommitment, Opts) ->
-    case maps:get(<<"signature-input">>, RawCommitment, not_found) of
-        not_found ->
-            % No stored signature-input, rebuild from committed list
-            rebuild_signature_params_line(RawCommitment, Opts);
-        StoredSigInput when is_binary(StoredSigInput) ->
-            % Use stored signature-input directly, extracting the params part
-            extract_params_from_sig_input(StoredSigInput);
-        _ ->
-            rebuild_signature_params_line(RawCommitment, Opts)
-    end.
-
-%% @doc Extract the params line from a stored signature-input header.
-%% Format: sig-name=("field1" "field2" ...);param1=value1;param2=value2
-%% We need to extract everything after the first `=` sign.
-extract_params_from_sig_input(SigInput) ->
-    case binary:split(SigInput, <<"=">>) of
-        [_SigName, ParamsLine] -> ParamsLine;
-        _ -> throw({invalid_signature_input, SigInput})
-    end.
-
-%% @doc Rebuild signature params line from the committed list.
-%% This is the original implementation, used when no stored signature-input.
-rebuild_signature_params_line(RawCommitment, Opts) ->
     Commitment =
         maps:without(
             [<<"signature">>, <<"signature-input">>],

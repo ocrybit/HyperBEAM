@@ -120,13 +120,10 @@ start_mainnet(Opts) ->
     ]),
     Wallet = hb:wallet(hb_opts:get(priv_key_location, no_viable_wallet_path, Opts)),
     BaseOpts = hb_http_server:set_default_opts(Opts),
-    % Use user-provided store if present, otherwise default to cache-mainnet
-    DefaultStore = #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
-    Store = maps:get(store, BaseOpts, DefaultStore),
     hb_http_server:start_node(
         FinalOpts =
             BaseOpts#{
-                store => Store,
+                store => #{ <<"store-module">> => hb_store_fs, <<"name">> => <<"cache-mainnet">> },
                 priv_wallet => Wallet
             }
     ),
