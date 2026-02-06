@@ -11,6 +11,7 @@
 %% names (e.g., from JS Symbol values) arrive via ao-types annotations in
 %% HTTP multipart requests, before device handlers can pre-create them.
 init() ->
+    ensure_prometheus_tables(),
     ensure_hb_name_table(),
     patch_hb_util_atom(),
     patch_dev_stack_transform(),
@@ -20,6 +21,50 @@ init() ->
     patch_dev_codec_json_bundle(),
     patch_codec_structured_binary(),
     ok.
+
+%% Pre-create prometheus ETS tables owned by a long-lived process.
+%% Prometheus app starts as temporary during rebar3 boot and stops immediately,
+%% destroying its supervisor-owned ETS tables. hb_event:server/0 then crashes
+%% trying to insert into the missing tables. By creating them here during
+%% on_load (synchronously) and giving ownership to a persistent process,
+%% the tables survive prometheus app restarts.
+%%
+%% Note: During on_load, the module isn't fully loaded yet so we use an
+%% inline fun for the spawned process instead of referencing a module function.
+ensure_prometheus_tables() ->
+    Tables = [
+        {prometheus_registry_table, {bag, read_concurrency}},
+        {prometheus_counter_table, write_concurrency},
+        {prometheus_gauge_table, write_concurrency},
+        {prometheus_summary_table, write_concurrency},
+        {prometheus_quantile_summary_table, write_concurrency},
+        {prometheus_histogram_table, write_concurrency},
+        {prometheus_boolean_table, write_concurrency}
+    ],
+    %% Spawn a long-lived owner process using inline fun (safe during on_load)
+    KeepAlive = fun Loop() -> receive _ -> Loop() end end,
+    Owner = case whereis(hbsig_prometheus_owner) of
+        undefined ->
+            Pid = spawn(KeepAlive),
+            try register(hbsig_prometheus_owner, Pid) catch _:_ -> ok end,
+            Pid;
+        Existing ->
+            Existing
+    end,
+    %% Create tables synchronously, then give ownership to the long-lived process
+    lists:foreach(fun({Name, Spec}) ->
+        case ets:info(Name) of
+            undefined ->
+                {Type, Concurrency} = case Spec of
+                    {T, C} -> {T, C};
+                    C -> {set, C}
+                end,
+                ets:new(Name, [Type, named_table, public, {Concurrency, true}]),
+                ets:give_away(Name, Owner, prometheus);
+            _ ->
+                ok
+        end
+    end, Tables).
 
 %% Spawn a long-lived process to own the hb_name_registry ETS table.
 %% Without this, the table may be created by a short-lived HTTP handler
