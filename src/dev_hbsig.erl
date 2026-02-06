@@ -1,6 +1,118 @@
 -module(dev_hbsig).
 -export([ json_to_erl/3, to_erl/1, to_str/1, structured_to/3, structured_from/3, httpsig_from/3, httpsig_to/3, msg2/3, flat_from/3, flat_to/3 ]).
+-export([ parse_rfc8941_list/1 ]).
+-on_load(init/0).
 -include("include/hb.hrl").
+
+%% @doc On module load, patch hb_ao:normalize_keys/2 to handle binary
+%% RFC 8941 list strings (e.g., <<"\"inc@1.0\", \"double@1.0\"">>).
+%% These strings are produced by the JS signing pipeline when arrays
+%% (like device-stack) are encoded as header values. Without this patch,
+%% dev_stack:resolve_map/3 crashes with {badmap, Binary} because
+%% normalize_keys returns binaries unchanged.
+init() ->
+    case patch_normalize_keys() of
+        ok -> ok;
+        {error, Reason} ->
+            io:format("[dev_hbsig] normalize_keys patch failed: ~p~n", [Reason]),
+            ok  % Return ok so module still loads
+    end.
+
+%% @doc Parse an RFC 8941 inner list string into a list of binaries.
+%% Input: <<"\"inc@1.0\", \"double@1.0\"">>
+%% Output: {ok, [<<"inc@1.0">>, <<"double@1.0">>]}
+%% Only matches strings with at least two quoted items separated by ", ".
+parse_rfc8941_list(Bin) when is_binary(Bin) ->
+    % Must contain ", " (separator between quoted items) to be a list
+    case binary:match(Bin, <<"\", \"">>) of
+        nomatch -> error;
+        _ ->
+            Items = binary:split(Bin, <<", ">>, [global]),
+            Parsed = lists:filtermap(fun(I) ->
+                case unquote_rfc8941_item(I) of
+                    error -> false;
+                    V -> {true, V}
+                end
+            end, Items),
+            case length(Parsed) =:= length(Items) of
+                true -> {ok, Parsed};
+                false -> error
+            end
+    end;
+parse_rfc8941_list(_) -> error.
+
+unquote_rfc8941_item(<<"\"", Rest/binary>>) when byte_size(Rest) > 0 ->
+    case binary:last(Rest) of
+        $" -> binary:part(Rest, 0, byte_size(Rest) - 1);
+        _ -> error
+    end;
+unquote_rfc8941_item(_) -> error.
+
+patch_normalize_keys() ->
+    case code:get_object_code(hb_ao) of
+        {hb_ao, Beam, File} ->
+            case beam_lib:chunks(Beam, [abstract_code]) of
+                {ok, {_, [{abstract_code, {raw_abstract_v1, Forms}}]}} ->
+                    NewForms = add_binary_clause(Forms),
+                    case compile:forms(NewForms, [return_errors]) of
+                        {ok, hb_ao, NewBeam} ->
+                            code:purge(hb_ao),
+                            code:load_binary(hb_ao, File, NewBeam),
+                            ok;
+                        {ok, hb_ao, NewBeam, _Warnings} ->
+                            code:purge(hb_ao),
+                            code:load_binary(hb_ao, File, NewBeam),
+                            ok;
+                        {error, Errors, _} ->
+                            {error, {compile_failed, Errors}}
+                    end;
+                _ ->
+                    {error, no_abstract_code}
+            end;
+        error ->
+            {error, no_object_code}
+    end.
+
+add_binary_clause(Forms) ->
+    lists:map(fun(Form) ->
+        case Form of
+            {function, Line, normalize_keys, 2, Clauses} ->
+                % Insert new binary clause before the catch-all (last clause)
+                BinClause = make_binary_normalize_clause(),
+                {AllButLast, [Last]} = lists:split(length(Clauses) - 1, Clauses),
+                {function, Line, normalize_keys, 2, AllButLast ++ [BinClause, Last]};
+            _ ->
+                Form
+        end
+    end, Forms).
+
+%% Build abstract form for:
+%% normalize_keys(Bin, Opts) when is_binary(Bin) ->
+%%     case dev_hbsig:parse_rfc8941_list(Bin) of
+%%         {ok, Items} -> normalize_keys(Items, Opts);
+%%         error -> Bin
+%%     end.
+make_binary_normalize_clause() ->
+    {clause, 0,
+        [{var, 0, 'Bin'}, {var, 0, 'Opts'}],
+        [[{call, 0, {atom, 0, is_binary}, [{var, 0, 'Bin'}]}]],
+        [{'case', 0,
+            {call, 0,
+                {remote, 0, {atom, 0, dev_hbsig}, {atom, 0, parse_rfc8941_list}},
+                [{var, 0, 'Bin'}]
+            },
+            [{clause, 0,
+                [{tuple, 0, [{atom, 0, ok}, {var, 0, 'Items'}]}],
+                [],
+                [{call, 0, {atom, 0, normalize_keys}, [{var, 0, 'Items'}, {var, 0, 'Opts'}]}]
+            },
+            {clause, 0,
+                [{atom, 0, error}],
+                [],
+                [{var, 0, 'Bin'}]
+            }]
+        }]
+    }.
 
 to_erl(Msg) ->
     Body = maps:get(<<"body">>, Msg),
