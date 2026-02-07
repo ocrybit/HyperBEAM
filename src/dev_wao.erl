@@ -1,7 +1,6 @@
 -module(dev_wao).
 -export([ info/3, compute/3, init/3, snapshot/3, normalize/3 ]).
 -export([ cache_module/3, httpsig/3, cron/3 ]).
--include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 cron(Msg1, Msg2, Opts) ->
@@ -32,7 +31,7 @@ compute(Msg1, Msg2, Opts) ->
 	    {ok, hb_ao:set( Msg1, #{ <<"results">> => #{ <<"1">> => #{ <<"method">> => <<"PATCH">>, <<"square">> => Count * Count, <<"double">> => Count * 2 } }, <<"count">> => Count }, Opts )}
     end.
 
-init(Msg, Msg2, Opts) -> 
+init(Msg, Msg2, Opts) ->
     {ok, hb_ao:set(Msg, #{ <<"count">> => 0 }, Opts)}.
 
 snapshot(Msg, _Msg2, _Opts) -> {ok, Msg}.
@@ -94,13 +93,13 @@ is_likely_base64(Data) when is_binary(Data) ->
         _:_ -> false
     end.
 
-httpsig(Msg, Msg2, Opts) -> 
+httpsig(Msg, Msg2, Opts) ->
     Msg3 = maps:without([
-			 <<"commitments">>, 
-			 <<"method">>, 
-			 <<"path">>, 
-			 <<"inline-body-key">>, 
-			 <<"content-length">>, 
+			 <<"commitments">>,
+			 <<"method">>,
+			 <<"path">>,
+			 <<"inline-body-key">>,
+			 <<"content-length">>,
 			 <<"content-type">>
 			], Msg2),
     Msg4 = convert_binaries_to_base64(Msg3),
@@ -145,32 +144,7 @@ convert_binaries_to_base64(Value) when is_tuple(Value) ->
 
 convert_binaries_to_base64(Value) ->
     %% For all other types (integers, atoms, floats, etc.), return as is
-    Value. 
-
-%% Alternative: More aggressive version that converts ALL binaries to base64
-%% regardless of whether they're valid UTF-8
-convert_all_binaries_to_base64(Value) when is_binary(Value) ->
-    base64:encode(Value);
-
-convert_all_binaries_to_base64(Value) when is_map(Value) ->
-    maps:fold(
-      fun(K, V, Acc) ->
-	      maps:put(K, convert_all_binaries_to_base64(V), Acc)
-      end,
-      #{},
-      Value
-     );
-
-convert_all_binaries_to_base64(Value) when is_list(Value) ->
-    case io_lib:printable_list(Value) of
-        true -> Value;
-        false -> lists:map(fun convert_all_binaries_to_base64/1, Value)
-    end;
-
-convert_all_binaries_to_base64(Value) when is_tuple(Value) ->
-    list_to_tuple(lists:map(fun convert_all_binaries_to_base64/1, tuple_to_list(Value)));
-
-convert_all_binaries_to_base64(Value) -> Value.
+    Value.
 
 %% Helper function to check if binary contains only ASCII printable characters
 is_safe_for_json(Bin) when is_binary(Bin) ->
@@ -180,33 +154,3 @@ is_safe_for_json(Bin) when is_binary(Bin) ->
     catch
         _:_ -> false
     end.
-
-%% Version that only converts binaries that would break JSON
-convert_unsafe_binaries_to_base64(Value) when is_binary(Value) ->
-    case is_safe_for_json(Value) of
-        true -> Value;
-        false -> base64:encode(Value)
-    end;
-
-convert_unsafe_binaries_to_base64(Value) when is_map(Value) ->
-    maps:fold(
-      fun(K, V, Acc) ->
-	      maps:put(K, convert_unsafe_binaries_to_base64(V), Acc)
-      end,
-      #{},
-      Value
-     );
-
-convert_unsafe_binaries_to_base64(Value) when is_list(Value) ->
-    case io_lib:printable_list(Value) of
-        true -> Value;
-        false -> lists:map(fun convert_unsafe_binaries_to_base64/1, Value)
-    end;
-
-convert_unsafe_binaries_to_base64(Value) when is_tuple(Value) ->
-    list_to_tuple(lists:map(fun convert_unsafe_binaries_to_base64/1, tuple_to_list(Value)));
-
-convert_unsafe_binaries_to_base64(Value) ->
-    Value.
-
-
